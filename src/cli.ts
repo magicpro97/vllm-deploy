@@ -1,5 +1,10 @@
 import { loadConfig, saveInstanceInfo, loadInstanceInfo, removeInstanceInfo } from "./config";
-import { searchOffers, createInstance, showInstances, showInstancesFormatted, destroyInstance, getLogs, sshConnect, type VastInstance } from "./vastai";
+import {
+  searchOffers, searchBestOffers, searchWithSavings,
+  createInstance, showInstances, showInstancesFormatted,
+  destroyInstance, getLogs, sshConnect,
+  type VastInstance, type ScoredOffer,
+} from "./vastai";
 import { log, sleep, formatPrice, table } from "./ui";
 
 const config = loadConfig();
@@ -39,32 +44,54 @@ function extractPort(inst: VastInstance, internalPort: string): string {
 // === Commands ===
 
 async function cmdSearch() {
-  log.info("\n🔍 Tìm GPU phù hợp...");
-  log.dim(`  GPU: ${config.gpuPrefer} | VRAM: >=${config.gpuMinVram}GB | Max: ${formatPrice(config.gpuMaxPrice)}/hr\n`);
+  log.info("\n🔍 Tìm GPU rẻ nhất trên toàn marketplace...");
+  log.dim(`  VRAM: >=${config.gpuMinVram}GB | Max: ${formatPrice(config.gpuMaxPrice)}/hr | Model: ~20GB Q4_K_M\n`);
 
-  const offers = await searchOffers({
-    type: config.instanceType,
-    gpuName: config.gpuPrefer,
+  const { onDemand, interruptible } = await searchWithSavings({
     minVram: config.gpuMinVram,
     minDisk: config.diskSize,
+    maxPrice: config.gpuMaxPrice,
     limit: 10,
   });
 
-  if (offers.length === 0) {
-    log.err("❌ Không tìm thấy GPU phù hợp.");
+  if (onDemand.length === 0 && interruptible.length === 0) {
+    log.err("❌ Không tìm thấy GPU nào phù hợp. Thử tăng GPU_MAX_PRICE trong .env");
     return;
   }
 
+  if (onDemand.length > 0) {
+    log.ok("\n📊 ON-DEMAND (ổn định, không bị ngắt):");
+    renderOfferTable(onDemand);
+  }
+
+  if (interruptible.length > 0) {
+    log.warn("\n💸 INTERRUPTIBLE (rẻ hơn, có thể bị ngắt):");
+    renderOfferTable(interruptible);
+  }
+
+  // Show savings
+  if (onDemand.length > 0 && interruptible.length > 0) {
+    const cheapOD = onDemand[0];
+    const cheapInt = interruptible[0];
+    const saving = ((1 - cheapInt.dph_total / cheapOD.dph_total) * 100).toFixed(0);
+    log.info(`\n💡 Interruptible rẻ hơn ~${saving}% (${formatPrice(cheapInt.dph_total)} vs ${formatPrice(cheapOD.dph_total)}/hr)`);
+  }
+}
+
+function renderOfferTable(offers: ScoredOffer[]) {
   table(
-    ["#", "ID", "GPU", "VRAM", "Price/hr", "Upload", "Reliability"],
+    ["#", "ID", "GPU", "VRAM", "$/hr", "~tok/s", "$/1Ktok", "Upload", "Rely", "Tier"],
     offers.map((o, i) => [
       String(i + 1),
       String(o.id),
       o.gpu_name,
       `${o.gpu_ram}GB`,
       formatPrice(o.dph_total),
-      `${Math.round(o.inet_up)}Mbps`,
+      `~${o.estTokPerSec}`,
+      `$${o.costPer1kTok.toFixed(4)}`,
+      `${Math.round(o.inet_up)}M`,
       `${(o.reliability * 100).toFixed(0)}%`,
+      o.tier,
     ])
   );
 }
@@ -72,47 +99,42 @@ async function cmdSearch() {
 async function cmdStart() {
   log.info("\n🚀 Deploy vLLM trên Vast.ai");
   log.dim(`  Model: ${config.model}`);
-  log.dim(`  GPU:   ${config.gpuPrefer} (>= ${config.gpuMinVram}GB VRAM)`);
+  log.dim(`  VRAM:  >= ${config.gpuMinVram}GB | Max: ${formatPrice(config.gpuMaxPrice)}/hr`);
   log.dim(`  Args:  ${config.vllmArgs}\n`);
 
-  // Search
-  log.warn("🔍 Tìm GPU rẻ nhất...");
-  const offers = await searchOffers({
+  // Smart multi-GPU search
+  log.warn("🔍 Tìm GPU inference rẻ nhất trên toàn marketplace...");
+  const offers = await searchBestOffers({
     type: config.instanceType,
-    gpuName: config.gpuPrefer,
     minVram: config.gpuMinVram,
     minDisk: config.diskSize,
-    limit: 5,
+    maxPrice: config.gpuMaxPrice,
+    limit: 8,
   });
 
   if (offers.length === 0) {
-    log.err("❌ Không tìm thấy GPU. Thử đổi GPU_PREFER trong .env");
+    log.err("❌ Không tìm thấy GPU. Thử tăng GPU_MAX_PRICE trong .env");
     process.exit(1);
   }
 
-  // Show offers
-  log.ok("\nTop offers:");
-  table(
-    ["#", "ID", "GPU", "VRAM", "Price/hr", "Upload"],
-    offers.map((o, i) => [
-      String(i + 1),
-      String(o.id),
-      o.gpu_name,
-      `${o.gpu_ram}GB`,
-      formatPrice(o.dph_total),
-      `${Math.round(o.inet_up)}Mbps`,
-    ])
-  );
+  // Show ranked offers
+  log.ok(`\n✅ Tìm thấy ${offers.length} offers (sorted: inference rẻ nhất trước):`);
+  renderOfferTable(offers);
 
-  const selected = offers[0];
-  log.ok(`\n✅ Chọn rẻ nhất: ID=${selected.id} @ ${formatPrice(selected.dph_total)}/hr`);
+  const best = offers[0];
+  log.ok(`\n🏆 Best deal: ${best.gpu_name} @ ${formatPrice(best.dph_total)}/hr | ~${best.estTokPerSec} tok/s | $${best.costPer1kTok.toFixed(4)}/1K tokens`);
+  log.dim(`   ${best.tier} | Reliability: ${(best.reliability * 100).toFixed(0)}% | Upload: ${Math.round(best.inet_up)}Mbps`);
 
-  const confirm = globalThis.prompt?.("Tiếp tục? (Y/n)") ?? "y";
+  const confirm = globalThis.prompt?.("Deploy GPU này? (Y/n/số 1-8)") ?? "y";
   if (confirm.toLowerCase() === "n") {
-    const choice = globalThis.prompt?.("Nhập số [1-5] hoặc Offer ID") ?? "1";
-    const idx = Number(choice);
-    const offer = idx >= 1 && idx <= offers.length ? offers[idx - 1] : selected;
-    return doCreate(offer.id);
+    process.exit(0);
+  }
+
+  let selected = best;
+  const idx = Number(confirm);
+  if (idx >= 1 && idx <= offers.length) {
+    selected = offers[idx - 1];
+    log.info(`  → Chọn #${idx}: ${selected.gpu_name} @ ${formatPrice(selected.dph_total)}/hr`);
   }
 
   await doCreate(selected.id);
