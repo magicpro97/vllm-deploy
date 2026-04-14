@@ -29,6 +29,12 @@ export interface CliArgs {
   // --dry-run           Search only, don't deploy
   dryRun: boolean;
 
+  // --hours <n>         Auto-stop after N hours
+  hours?: number;
+
+  // --budget <n>        Auto-stop after spending $N
+  budget?: number;
+
   // Extra flags passed through (e.g. --restore, --off)
   extra: string[];
 }
@@ -103,6 +109,18 @@ export function parseArgs(argv: string[]): CliArgs {
       // Dry run
       case "--dry-run":
         args.dryRun = true;
+        break;
+
+      // Auto-stop after N hours
+      case "--hours":
+        args.hours = Number(next);
+        i++;
+        break;
+
+      // Auto-stop after spending $N
+      case "--budget":
+        args.budget = Number(next);
+        i++;
         break;
 
       // Pass through unknown flags

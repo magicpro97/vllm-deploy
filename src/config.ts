@@ -22,6 +22,9 @@ export interface InstanceInfo {
   model: string;
   createdAt: string;
   apiUrl: string;
+  dphTotal?: number;     // $/hr for budget tracking
+  stopAfterHours?: number;
+  stopAfterBudget?: number;
 }
 
 const DEFAULT_CONFIG: Config = {

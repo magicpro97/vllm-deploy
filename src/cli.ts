@@ -132,6 +132,9 @@ async function cmdStart() {
   log.dim(`  Args:      ${vllmArgs}`);
   if (args.gpu) log.dim(`  GPU lock:  ${args.gpu}`);
   if (args.region) log.dim(`  Region:    ${args.region}`);
+  if (args.hours) log.dim(`  ⏰ Auto-stop: ${args.hours}h`);
+  if (args.budget) log.dim(`  💵 Budget:    $${args.budget}`);
+  if (args.hours && args.budget) log.dim(`  → Điều kiện nào đến trước sẽ tự tắt`);
   console.log();
 
   // Smart multi-GPU search
@@ -179,10 +182,10 @@ async function cmdStart() {
     log.info("  → --auto: tự chọn rẻ nhất");
   }
 
-  await doCreate(selected.id, model, vllmArgs);
+  await doCreate(selected.id, model, vllmArgs, selected.dph_total);
 }
 
-async function doCreate(offerId: number, model?: string, vllmArgs?: string) {
+async function doCreate(offerId: number, model?: string, vllmArgs?: string, dphTotal?: number) {
   log.warn("\n📦 Tạo instance...");
 
   const useModel = model ?? config.model;
@@ -227,11 +230,85 @@ async function doCreate(offerId: number, model?: string, vllmArgs?: string) {
       model: config.model,
       createdAt: new Date().toISOString(),
       apiUrl,
+      dphTotal: dphTotal,
+      stopAfterHours: args.hours,
+      stopAfterBudget: args.budget,
     });
+
+    // Start auto-shutdown watchdog if limits are set
+    if (args.hours || args.budget) {
+      await startWatchdog(instanceId, dphTotal ?? 0);
+    }
   }
 }
 
-async function cmdStop() {
+// === Auto-shutdown watchdog ===
+
+async function startWatchdog(instanceId: string, dphTotal: number) {
+  const hours = args.hours;
+  const budget = args.budget;
+  const startTime = Date.now();
+
+  // Calculate when each limit is hit
+  const maxMs = hours ? hours * 3600 * 1000 : Infinity;
+  const budgetMs = (budget && dphTotal > 0) ? (budget / dphTotal) * 3600 * 1000 : Infinity;
+  const limitMs = Math.min(maxMs, budgetMs);
+  const limitMinutes = Math.round(limitMs / 60000);
+  const limitSource = maxMs <= budgetMs ? "⏰ hours" : "💵 budget";
+
+  log.warn(`\n🔒 Auto-shutdown watchdog đang chạy:`);
+  if (hours) log.dim(`   ⏰ Tắt sau ${hours}h`);
+  if (budget) log.dim(`   💵 Tắt khi chi $${budget} (~${((budget / dphTotal) * 60).toFixed(0)} phút @ ${formatPrice(dphTotal)}/hr)`);
+  log.dim(`   → ${limitSource} đến trước: ~${limitMinutes} phút`);
+  log.warn(`   ⚠️  Đóng terminal sẽ HỦY watchdog! Dùng 'bun run deploy stop' để tắt thủ công.`);
+
+  // Poll every 60 seconds
+  const checkInterval = 60_000;
+
+  while (true) {
+    await sleep(checkInterval);
+
+    const elapsed = Date.now() - startTime;
+    const elapsedHours = elapsed / 3600000;
+    const spent = elapsedHours * dphTotal;
+
+    // Check time limit
+    if (hours && elapsedHours >= hours) {
+      log.warn(`\n⏰ ĐÃ ĐẠT ${hours}h — tự tắt instance...`);
+      await autoDestroy(instanceId, `${hours}h`, spent);
+      return;
+    }
+
+    // Check budget limit
+    if (budget && spent >= budget) {
+      log.warn(`\n💵 ĐÃ CHI $${spent.toFixed(2)}/${budget} — tự tắt instance...`);
+      await autoDestroy(instanceId, `$${spent.toFixed(2)}`, spent);
+      return;
+    }
+
+    // Progress report every 10 minutes
+    if (Math.round(elapsed / checkInterval) % 10 === 0) {
+      const remaining = Math.max(0, limitMs - elapsed);
+      log.dim(`   📊 ${elapsedHours.toFixed(1)}h | $${spent.toFixed(3)} spent | ~${Math.round(remaining / 60000)}m còn lại`);
+    }
+  }
+}
+
+async function autoDestroy(instanceId: string, reason: string, totalSpent: number) {
+  try {
+    await destroyInstance(Number(instanceId));
+    removeInstanceInfo();
+    log.ok(`\n✅ Instance ${instanceId} đã tự tắt.`);
+    log.info(`   Lý do: ${reason}`);
+    log.info(`   Tổng chi: ~$${totalSpent.toFixed(3)}`);
+  } catch (e) {
+    log.err(`❌ Không tắt được instance ${instanceId}: ${e}`);
+    log.warn(`   Hãy chạy: bun run deploy stop`);
+  }
+  process.exit(0);
+}
+
+async function cmdStop() {
   const instances = await showInstances();
 
   if (instances.length === 0) {
@@ -486,6 +563,7 @@ function cmdHelp() {
       --off         Tắt vLLM, dùng lại Anthropic API
     logs            Xem logs instance
     search          Tìm GPU available (không deploy)
+    watch           Gắn watchdog vào instance đang chạy
     help            Hiện help này
 
   ${"\x1b[33m"}FLAGS (cho start/search):${"\x1b[0m"}
@@ -500,6 +578,8 @@ function cmdHelp() {
     --region <geo>  🌍 Ưu tiên vùng (US, EU, Asia)
     --auto / -y     🤖 Tự chọn rẻ nhất, không hỏi
     --dry-run       🔍 Chỉ search, không deploy
+    --hours <n>     ⏰ Tự tắt sau N giờ (e.g. 2)
+    --budget <n>    💵 Tự tắt khi chi $N (e.g. 1.50)
 
   ${"\x1b[33m"}EXAMPLES:${"\x1b[0m"}
     ${"\x1b[90m"}bun run start                        # Smart search, chọn best deal${"\x1b[0m"}
@@ -510,9 +590,35 @@ function cmdHelp() {
     ${"\x1b[90m"}bun run start --model google/gemma-4-12b-it --context 16384${"\x1b[0m"}
     ${"\x1b[90m"}bun run search --spot                  # So sánh on-demand vs spot${"\x1b[0m"}
     ${"\x1b[90m"}bun run start --cheap --spot -y         # Siêu tiết kiệm, full auto${"\x1b[0m"}
+    ${"\x1b[90m"}bun run start --hours 2 -y               # Chạy 2h rồi tự tắt${"\x1b[0m"}
+    ${"\x1b[90m"}bun run start --budget 1 --hours 3 -y    # Tắt khi chi $1 HOẶC 3h${"\x1b[0m"}
 
   ${"\x1b[32m"}CHI PHÍ: ~$0.20-0.50/hr | ~$11-35/tháng (2h/ngày)${"\x1b[0m"}
 `);
+}
+
+// === Watch command: attach watchdog to running instance ===
+async function cmdWatch() {
+  if (!args.hours && !args.budget) {
+    log.err("❌ Cần --hours <n> và/hoặc --budget <n>");
+    log.dim("   Ví dụ: bun run deploy watch --hours 2 --budget 1");
+    return;
+  }
+
+  const info = loadInstanceInfo();
+  if (!info) {
+    log.err("❌ Chưa có instance. Chạy: bun run deploy start");
+    return;
+  }
+
+  const dph = info.dphTotal ?? 0;
+  if (dph <= 0) {
+    log.err("❌ Không biết giá/hr. Chạy lại start với version mới.");
+    return;
+  }
+
+  log.info(`\n👀 Watch instance ${info.instanceId} @ ${formatPrice(dph)}/hr`);
+  await startWatchdog(info.instanceId, dph);
 }
 
 // === Router ===
@@ -526,6 +632,7 @@ const commands: Record<string, () => Promise<void> | void> = {
   "config-claude": cmdConfigClaude,
   logs: cmdLogs,
   search: cmdSearch,
+  watch: cmdWatch,
   help: cmdHelp,
 };
 
