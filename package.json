@@ -1,0 +1,24 @@
+{
+  "name": "vllm-deploy",
+  "version": "1.0.0",
+  "description": "Deploy vLLM on Vast.ai — 1 command, cheapest GPU",
+  "type": "module",
+  "scripts": {
+    "deploy": "bun run src/cli.ts",
+    "start": "bun run src/cli.ts start",
+    "stop": "bun run src/cli.ts stop",
+    "status": "bun run src/cli.ts status",
+    "test:api": "bun run src/cli.ts test",
+    "info": "bun run src/cli.ts info",
+    "search": "bun run src/cli.ts search",
+    "ssh": "bun run src/cli.ts ssh",
+    "logs": "bun run src/cli.ts logs",
+    "config-claude": "bun run src/cli.ts config-claude"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

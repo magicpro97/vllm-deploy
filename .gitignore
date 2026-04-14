@@ -1,0 +1,5 @@
+.env
+*.log
+instance_info.json
+node_modules/
+bun.lock
