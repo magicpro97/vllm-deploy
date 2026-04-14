@@ -21,7 +21,7 @@
 |--------|------|---------|-------------|-----------|
 | **GGUF Q4_K_M** | ~20GB | ~22-24GB | Mọi GPU | ~95-96% |
 | **GGUF Q5_K_M** | ~23GB | ~25-27GB | Mọi GPU | ~97-98% |
-| **NVFP4** | ~18GB | ~20-22GB | Blackwell only | ~99.5% |
+| **NVFP4** (ModelOpt) | ~18GB | ~20-22GB | Blackwell only, cần pre-quantize | ~99.5% |
 | **FP8** | ~32GB | ~34-36GB | Ampere+ | ~99% |
 | **BF16** (full) | ~62GB | ~64-68GB | Mọi GPU | 100% |
 
@@ -41,10 +41,13 @@ VLLM_ARGS=--max-model-len 8192 --gpu-memory-utilization 0.95
 # ~$18/tháng (2h/ngày)
 ```
 
-### Chất lượng cao: RTX 5090 + NVFP4
+### Chất lượng cao: RTX 5090 + NVFP4 (cần pre-quantized checkpoint)
 ```bash
+# ⚠️ NVFP4 yêu cầu model đã được quantize bằng NVIDIA ModelOpt
+# Model charaf/gemma4-31b-claude-opus-abliterated CHƯA CÓ NVFP4 checkpoint
+# Nếu có checkpoint NVFP4:
 GPU_PREFER=RTX 5090
-VLLM_ARGS=--max-model-len 8192 --gpu-memory-utilization 0.95 --quantization nvfp4
+VLLM_ARGS=--max-model-len 8192 --gpu-memory-utilization 0.95 --quantization modelopt
 # ~$25/tháng (2h/ngày)
 ```
 
