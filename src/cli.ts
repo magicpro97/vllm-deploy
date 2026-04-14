@@ -373,31 +373,87 @@ async function cmdSsh() {
 }
 
 async function cmdConfigClaude() {
-  const info = loadInstanceInfo();
-  let apiUrl: string;
-  let token: string;
+  const home = process.env.USERPROFILE || process.env.HOME || "";
+  const settingsPath = `${home}/.claude/settings.json`;
+  const backupPath = `${home}/.claude/settings.json.vllm-backup`;
 
-  if (info) {
-    apiUrl = info.apiUrl;
-    token = info.token || "";
-  } else {
-    apiUrl = globalThis.prompt?.("Nhập API URL (http://IP:PORT/v1)") ?? "";
-    token = globalThis.prompt?.("Nhập API token") ?? "";
+  // --restore flag: khôi phục backup
+  if (args.extra.includes("--restore")) {
+    return restoreClaudeSettings(settingsPath, backupPath);
   }
 
-  const claudeConfig = {
-    apiProvider: "openai-compatible",
-    apiBaseUrl: apiUrl,
-    apiKey: token || "not-needed",
-    model: config.model,
-  };
+  // --off flag: tắt vLLM, dùng lại Anthropic API gốc
+  if (args.extra.includes("--off")) {
+    return disableVllmInClaude(settingsPath);
+  }
 
-  log.info("\n📋 Claude Code Config:");
-  log.ok(JSON.stringify(claudeConfig, null, 2));
-  log.warn("\n💡 Thêm config này vào Claude Code settings.");
-  log.dim(`   Hoặc set env:`);
-  log.dim(`   export OPENAI_API_BASE="${apiUrl}"`);
-  log.dim(`   export OPENAI_API_KEY="${token}"`);
+  // Get instance info
+  const info = loadInstanceInfo();
+  if (!info) {
+    log.err("❌ Chưa có instance. Chạy: bun run deploy start");
+    log.dim("   Hoặc dùng --restore để khôi phục settings cũ");
+    return;
+  }
+
+  // Read current settings
+  let settings: Record<string, any> = {};
+  try {
+    const raw = await Bun.file(settingsPath).text();
+    settings = JSON.parse(raw);
+  } catch {
+    log.warn("⚠️  Không tìm thấy settings.json, tạo mới");
+  }
+
+  // Backup trước khi sửa (chỉ backup lần đầu)
+  const backupExists = await Bun.file(backupPath).exists();
+  if (!backupExists) {
+    await Bun.write(backupPath, JSON.stringify(settings, null, 2));
+    log.ok(`💾 Backup: ${backupPath}`);
+  }
+
+  // Update env vars
+  if (!settings.env) settings.env = {};
+  const apiBase = info.apiUrl.replace(/\/v1\/?$/, ""); // Claude cần base URL không có /v1
+
+  settings.env.ANTHROPIC_BASE_URL = apiBase;
+  settings.env.ANTHROPIC_API_KEY = info.token || "not-needed";
+
+  // Ghi file
+  await Bun.write(settingsPath, JSON.stringify(settings, null, 2));
+
+  log.ok("\n✅ Claude Code settings đã cập nhật!");
+  log.info(`   ANTHROPIC_BASE_URL = ${apiBase}`);
+  log.info(`   ANTHROPIC_API_KEY  = ${info.token ? "***" + info.token.slice(-4) : "not-needed"}`);
+  log.warn("\n⚡ Restart Claude Code để áp dụng.");
+  log.dim(`   Khôi phục: bun run deploy config-claude --restore`);
+  log.dim(`   Tắt vLLM:  bun run deploy config-claude --off`);
+}
+
+async function restoreClaudeSettings(settingsPath: string, backupPath: string) {
+  try {
+    const raw = await Bun.file(backupPath).text();
+    await Bun.write(settingsPath, raw);
+    log.ok("✅ Đã khôi phục settings từ backup!");
+    log.warn("⚡ Restart Claude Code để áp dụng.");
+  } catch {
+    log.err("❌ Không tìm thấy backup. Không có gì để khôi phục.");
+  }
+}
+
+async function disableVllmInClaude(settingsPath: string) {
+  try {
+    const raw = await Bun.file(settingsPath).text();
+    const settings = JSON.parse(raw);
+    if (settings.env) {
+      delete settings.env.ANTHROPIC_BASE_URL;
+      delete settings.env.ANTHROPIC_API_KEY;
+    }
+    await Bun.write(settingsPath, JSON.stringify(settings, null, 2));
+    log.ok("✅ Đã tắt vLLM proxy — Claude Code sẽ dùng API gốc.");
+    log.warn("⚡ Restart Claude Code để áp dụng.");
+  } catch {
+    log.err("❌ Không đọc được settings.json");
+  }
 }
 
 async function cmdLogs() {
@@ -425,7 +481,9 @@ function cmdHelp() {
     info            Hiện thông tin kết nối
     test            Test API endpoint
     ssh             SSH vào instance
-    config-claude   Tạo config cho Claude Code
+    config-claude   Cập nhật Claude Code settings → vLLM
+      --restore     Khôi phục settings gốc từ backup
+      --off         Tắt vLLM, dùng lại Anthropic API
     logs            Xem logs instance
     search          Tìm GPU available (không deploy)
     help            Hiện help này

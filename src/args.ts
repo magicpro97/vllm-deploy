@@ -28,6 +28,9 @@ export interface CliArgs {
 
   // --dry-run           Search only, don't deploy
   dryRun: boolean;
+
+  // Extra flags passed through (e.g. --restore, --off)
+  extra: string[];
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -37,6 +40,7 @@ export function parseArgs(argv: string[]): CliArgs {
     spot: false,
     auto: false,
     dryRun: false,
+    extra: [],
   };
 
   for (let i = 3; i < argv.length; i++) {
@@ -99,6 +103,11 @@ export function parseArgs(argv: string[]): CliArgs {
       // Dry run
       case "--dry-run":
         args.dryRun = true;
+        break;
+
+      // Pass through unknown flags
+      default:
+        if (arg.startsWith("--")) args.extra.push(arg);
         break;
     }
   }
