@@ -96,6 +96,8 @@ export async function searchBestOffers(opts: {
   minUploadSpeed?: number;
   limit?: number;
   gpuCandidates?: string[];
+  sortBy?: "best" | "cheap" | "fast";
+  region?: string;
 }): Promise<ScoredOffer[]> {
   const candidates = opts.gpuCandidates ?? GPU_CANDIDATES;
   const minReliability = opts.minReliability ?? 0.90;
@@ -122,6 +124,7 @@ export async function searchBestOffers(opts: {
       if (o.reliability < minReliability) return false;
       if (o.inet_up < minUpload) return false;
       if (o.gpu_ram < opts.minVram) return false;
+      if (opts.region && o.geolocation && !o.geolocation.toUpperCase().includes(opts.region)) return false;
       return true;
     })
     .map((o) => {
@@ -132,11 +135,10 @@ export async function searchBestOffers(opts: {
       const costPer1kTok = tokPerSec > 0 ? (pricePerSec / tokPerSec) * 1000 : 999;
 
       // Value score: higher = better deal
-      // Factors: tok/s per dollar (60%), reliability (20%), upload speed (10%), VRAM headroom (10%)
       const tokPerDollar = tokPerSec / o.dph_total;
       const reliabilityBonus = o.reliability;
-      const uploadBonus = Math.min(o.inet_up / 1000, 1); // normalize to 0-1
-      const vramHeadroom = Math.min((o.gpu_ram - opts.minVram) / 24, 1); // bonus for extra VRAM
+      const uploadBonus = Math.min(o.inet_up / 1000, 1);
+      const vramHeadroom = Math.min((o.gpu_ram - opts.minVram) / 24, 1);
 
       const score =
         tokPerDollar * 0.60 +
@@ -153,8 +155,19 @@ export async function searchBestOffers(opts: {
       };
     });
 
-  // Sort by cost per 1K tokens (cheapest inference first)
-  scored.sort((a, b) => a.costPer1kTok - b.costPer1kTok);
+  // Sort by strategy
+  switch (opts.sortBy ?? "best") {
+    case "cheap":
+      scored.sort((a, b) => a.dph_total - b.dph_total);
+      break;
+    case "fast":
+      scored.sort((a, b) => b.estTokPerSec - a.estTokPerSec);
+      break;
+    case "best":
+    default:
+      scored.sort((a, b) => a.costPer1kTok - b.costPer1kTok);
+      break;
+  }
 
   return scored.slice(0, opts.limit ?? 10);
 }

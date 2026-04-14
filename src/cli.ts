@@ -6,9 +6,11 @@ import {
   type VastInstance, type ScoredOffer,
 } from "./vastai";
 import { log, sleep, formatPrice, table } from "./ui";
+import { parseArgs, describeStrategy, type CliArgs } from "./args";
 
 const config = loadConfig();
-const action = Bun.argv[2] ?? "help";
+const args = parseArgs(Bun.argv);
+const action = args.action;
 
 async function waitForReady(instanceId: string, timeoutSec = 600): Promise<VastInstance | null> {
   log.info("\n⏳ Đợi instance ready...");
@@ -44,38 +46,57 @@ function extractPort(inst: VastInstance, internalPort: string): string {
 // === Commands ===
 
 async function cmdSearch() {
+  const maxPrice = args.maxPrice ?? config.gpuMaxPrice;
+  const type = args.spot ? "interruptible" : config.instanceType;
+
   log.info("\n🔍 Tìm GPU rẻ nhất trên toàn marketplace...");
-  log.dim(`  VRAM: >=${config.gpuMinVram}GB | Max: ${formatPrice(config.gpuMaxPrice)}/hr | Model: ~20GB Q4_K_M\n`);
+  log.dim(`  Strategy:  ${describeStrategy(args.strategy)}`);
+  log.dim(`  VRAM: >=${config.gpuMinVram}GB | Max: ${formatPrice(maxPrice)}/hr | Type: ${type}`);
+  if (args.gpu) log.dim(`  GPU lock:  ${args.gpu}`);
+  if (args.region) log.dim(`  Region:    ${args.region}`);
+  console.log();
 
-  const { onDemand, interruptible } = await searchWithSavings({
-    minVram: config.gpuMinVram,
-    minDisk: config.diskSize,
-    maxPrice: config.gpuMaxPrice,
-    limit: 10,
-  });
+  if (args.spot) {
+    // Show both for comparison
+    const { onDemand, interruptible } = await searchWithSavings({
+      minVram: config.gpuMinVram,
+      minDisk: config.diskSize,
+      maxPrice,
+      limit: 8,
+    });
 
-  if (onDemand.length === 0 && interruptible.length === 0) {
-    log.err("❌ Không tìm thấy GPU nào phù hợp. Thử tăng GPU_MAX_PRICE trong .env");
+    if (onDemand.length > 0) {
+      log.ok("📊 ON-DEMAND:");
+      renderOfferTable(onDemand);
+    }
+    if (interruptible.length > 0) {
+      log.warn("\n💸 INTERRUPTIBLE (spot):");
+      renderOfferTable(interruptible);
+    }
+    if (onDemand.length > 0 && interruptible.length > 0) {
+      const saving = ((1 - interruptible[0].dph_total / onDemand[0].dph_total) * 100).toFixed(0);
+      log.info(`\n💡 Spot rẻ hơn ~${saving}%`);
+    }
     return;
   }
 
-  if (onDemand.length > 0) {
-    log.ok("\n📊 ON-DEMAND (ổn định, không bị ngắt):");
-    renderOfferTable(onDemand);
+  const offers = await searchBestOffers({
+    type,
+    minVram: config.gpuMinVram,
+    minDisk: config.diskSize,
+    maxPrice,
+    sortBy: args.strategy,
+    region: args.region,
+    gpuCandidates: args.gpu ? [args.gpu] : undefined,
+    limit: 10,
+  });
+
+  if (offers.length === 0) {
+    log.err("❌ Không tìm thấy GPU. Thử: --max-price 1.0 hoặc bỏ --gpu");
+    return;
   }
 
-  if (interruptible.length > 0) {
-    log.warn("\n💸 INTERRUPTIBLE (rẻ hơn, có thể bị ngắt):");
-    renderOfferTable(interruptible);
-  }
-
-  // Show savings
-  if (onDemand.length > 0 && interruptible.length > 0) {
-    const cheapOD = onDemand[0];
-    const cheapInt = interruptible[0];
-    const saving = ((1 - cheapInt.dph_total / cheapOD.dph_total) * 100).toFixed(0);
-    log.info(`\n💡 Interruptible rẻ hơn ~${saving}% (${formatPrice(cheapInt.dph_total)} vs ${formatPrice(cheapOD.dph_total)}/hr)`);
-  }
+  renderOfferTable(offers);
 }
 
 function renderOfferTable(offers: ScoredOffer[]) {
@@ -97,55 +118,79 @@ function renderOfferTable(offers: ScoredOffer[]) {
 }
 
 async function cmdStart() {
+  const maxPrice = args.maxPrice ?? config.gpuMaxPrice;
+  const type = args.spot ? "interruptible" : config.instanceType;
+  const model = args.model ?? config.model;
+  const vllmArgs = args.context
+    ? config.vllmArgs.replace(/--max-model-len \d+/, `--max-model-len ${args.context}`)
+    : config.vllmArgs;
+
   log.info("\n🚀 Deploy vLLM trên Vast.ai");
-  log.dim(`  Model: ${config.model}`);
-  log.dim(`  VRAM:  >= ${config.gpuMinVram}GB | Max: ${formatPrice(config.gpuMaxPrice)}/hr`);
-  log.dim(`  Args:  ${config.vllmArgs}\n`);
+  log.dim(`  Model:     ${model}`);
+  log.dim(`  Strategy:  ${describeStrategy(args.strategy)}`);
+  log.dim(`  Type:      ${type} | Max: ${formatPrice(maxPrice)}/hr`);
+  log.dim(`  Args:      ${vllmArgs}`);
+  if (args.gpu) log.dim(`  GPU lock:  ${args.gpu}`);
+  if (args.region) log.dim(`  Region:    ${args.region}`);
+  console.log();
 
   // Smart multi-GPU search
-  log.warn("🔍 Tìm GPU inference rẻ nhất trên toàn marketplace...");
+  log.warn("🔍 Tìm GPU inference rẻ nhất...");
   const offers = await searchBestOffers({
-    type: config.instanceType,
+    type,
     minVram: config.gpuMinVram,
     minDisk: config.diskSize,
-    maxPrice: config.gpuMaxPrice,
+    maxPrice,
+    sortBy: args.strategy,
+    region: args.region,
+    gpuCandidates: args.gpu ? [args.gpu] : undefined,
     limit: 8,
   });
 
   if (offers.length === 0) {
-    log.err("❌ Không tìm thấy GPU. Thử tăng GPU_MAX_PRICE trong .env");
+    log.err("❌ Không tìm thấy GPU. Thử: --max-price 1.0 hoặc bỏ --gpu filter");
     process.exit(1);
   }
 
   // Show ranked offers
-  log.ok(`\n✅ Tìm thấy ${offers.length} offers (sorted: inference rẻ nhất trước):`);
+  log.ok(`\n✅ ${offers.length} offers (${describeStrategy(args.strategy)}):`);
   renderOfferTable(offers);
 
   const best = offers[0];
-  log.ok(`\n🏆 Best deal: ${best.gpu_name} @ ${formatPrice(best.dph_total)}/hr | ~${best.estTokPerSec} tok/s | $${best.costPer1kTok.toFixed(4)}/1K tokens`);
-  log.dim(`   ${best.tier} | Reliability: ${(best.reliability * 100).toFixed(0)}% | Upload: ${Math.round(best.inet_up)}Mbps`);
+  log.ok(`\n🏆 Best: ${best.gpu_name} @ ${formatPrice(best.dph_total)}/hr | ~${best.estTokPerSec} tok/s | $${best.costPer1kTok.toFixed(4)}/1Ktok`);
+  log.dim(`   ${best.tier} | ${(best.reliability * 100).toFixed(0)}% reliable | ${Math.round(best.inet_up)}Mbps`);
 
-  const confirm = globalThis.prompt?.("Deploy GPU này? (Y/n/số 1-8)") ?? "y";
-  if (confirm.toLowerCase() === "n") {
-    process.exit(0);
+  if (args.dryRun) {
+    log.warn("\n⏹️  --dry-run: không deploy.");
+    return;
   }
 
   let selected = best;
-  const idx = Number(confirm);
-  if (idx >= 1 && idx <= offers.length) {
-    selected = offers[idx - 1];
-    log.info(`  → Chọn #${idx}: ${selected.gpu_name} @ ${formatPrice(selected.dph_total)}/hr`);
+
+  if (!args.auto) {
+    const confirm = globalThis.prompt?.("Deploy? (Y/n/số 1-8)") ?? "y";
+    if (confirm.toLowerCase() === "n") process.exit(0);
+    const idx = Number(confirm);
+    if (idx >= 1 && idx <= offers.length) {
+      selected = offers[idx - 1];
+      log.info(`  → Chọn #${idx}: ${selected.gpu_name} @ ${formatPrice(selected.dph_total)}/hr`);
+    }
+  } else {
+    log.info("  → --auto: tự chọn rẻ nhất");
   }
 
-  await doCreate(selected.id);
+  await doCreate(selected.id, model, vllmArgs);
 }
 
-async function doCreate(offerId: number) {
+async function doCreate(offerId: number, model?: string, vllmArgs?: string) {
   log.warn("\n📦 Tạo instance...");
 
+  const useModel = model ?? config.model;
+  const useArgs = vllmArgs ?? config.vllmArgs;
+
   const env: Record<string, string> = {
-    VLLM_MODEL: config.model,
-    VLLM_ARGS: config.vllmArgs,
+    VLLM_MODEL: useModel,
+    VLLM_ARGS: useArgs,
     AUTO_PARALLEL: "true",
   };
   if (config.hfToken) env.HUGGING_FACE_HUB_TOKEN = config.hfToken;
@@ -371,26 +416,44 @@ function cmdHelp() {
   ════════════════════════════════════════
 
   ${"\x1b[33m"}USAGE:${"\x1b[0m"}
-    bun run deploy <action>
+    bun run deploy <action> [flags]
 
   ${"\x1b[33m"}ACTIONS:${"\x1b[0m"}
     start           Tìm GPU rẻ nhất → deploy instance
     stop            Destroy instance → ngừng tính tiền
     status          Xem instances đang chạy
-    info            Hiện thông tin kết nối (IP, port, token)
+    info            Hiện thông tin kết nối
     test            Test API endpoint
     ssh             SSH vào instance
     config-claude   Tạo config cho Claude Code
     logs            Xem logs instance
-    search          Tìm GPU available
+    search          Tìm GPU available (không deploy)
     help            Hiện help này
 
-  ${"\x1b[33m"}SETUP:${"\x1b[0m"}
-    ${"\x1b[90m"}1. cp .env.example .env${"\x1b[0m"}
-    ${"\x1b[90m"}2. Điền VASTAI_API_KEY vào .env${"\x1b[0m"}
-    ${"\x1b[90m"}3. bun run deploy start${"\x1b[0m"}
+  ${"\x1b[33m"}FLAGS (cho start/search):${"\x1b[0m"}
+    --cheap         💰 Giá thuê/hr thấp nhất (có thể chậm)
+    --fast          ⚡ Tok/s cao nhất (có thể đắt)
+    --best          ⭐ $/1K tokens thấp nhất (default, cân bằng)
+    --gpu <name>    🎯 Lock GPU cụ thể (e.g. "RTX 4090")
+    --max-price <n> 💵 Max giá/hr (e.g. 0.80)
+    --spot          💸 Dùng interruptible (rẻ hơn ~30%)
+    --model <name>  🔄 Đổi model (override .env)
+    --context <n>   📏 Context length (e.g. 4096, 16384)
+    --region <geo>  🌍 Ưu tiên vùng (US, EU, Asia)
+    --auto / -y     🤖 Tự chọn rẻ nhất, không hỏi
+    --dry-run       🔍 Chỉ search, không deploy
 
-  ${"\x1b[32m"}CHI PHÍ: ~$0.30-0.50/hr RTX 4090 | ~$18/tháng (2h/ngày)${"\x1b[0m"}
+  ${"\x1b[33m"}EXAMPLES:${"\x1b[0m"}
+    ${"\x1b[90m"}bun run start                        # Smart search, chọn best deal${"\x1b[0m"}
+    ${"\x1b[90m"}bun run start --cheap                 # Rẻ nhất $/hr${"\x1b[0m"}
+    ${"\x1b[90m"}bun run start --fast --gpu "A100"      # A100 nhanh nhất${"\x1b[0m"}
+    ${"\x1b[90m"}bun run start --spot -y                # Spot rẻ, auto deploy${"\x1b[0m"}
+    ${"\x1b[90m"}bun run start --max-price 0.30 -y      # Max $0.30/hr, auto${"\x1b[0m"}
+    ${"\x1b[90m"}bun run start --model google/gemma-4-12b-it --context 16384${"\x1b[0m"}
+    ${"\x1b[90m"}bun run search --spot                  # So sánh on-demand vs spot${"\x1b[0m"}
+    ${"\x1b[90m"}bun run start --cheap --spot -y         # Siêu tiết kiệm, full auto${"\x1b[0m"}
+
+  ${"\x1b[32m"}CHI PHÍ: ~$0.20-0.50/hr | ~$11-35/tháng (2h/ngày)${"\x1b[0m"}
 `);
 }
 
