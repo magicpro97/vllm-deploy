@@ -50,15 +50,19 @@ block-beta
     I["🌐 Network\nUp/Down"]
   end
 
-  block:latency:8
-    J["⚡ Latency sparkline\nResponse times history"]
+  block:latency:6
+    J["⚡ Latency sparkline"]
   end
-  block:settings:4
+  block:settings:6
     K["⚙ Settings\nModel, Strategy, Config"]
   end
 
+  block:logs:12
+    L2["📜 Realtime Logs\nInstance logs (scrollable)"]
+  end
+
   block:hotkeys:12
-    L["[q] Quit  [s] Stop instance  [r] Refresh"]
+    L["[q] Quit  [s] Stop  [r] Refresh  [l] Logs"]
   end
 ```
 
@@ -106,13 +110,20 @@ block-beta
 - Watchdog status
 - Context length, prefix caching
 
+### 📜 Realtime Logs
+- Logs từ instance (vLLM, supervisor)
+- Scrollable — dùng mouse hoặc arrow keys
+- Auto-fetch mỗi 15 giây
+- Deduplicated — không hiện dòng trùng
+
 ## Hotkeys
 
 | Key | Action |
 |-----|--------|
 | `q` / `Ctrl+C` | Thoát dashboard |
 | `s` | Stop instance + thoát |
-| `r` | Refresh data ngay |
+| `r` | Refresh tất cả data |
+| `l` | Fetch logs ngay lập tức |
 
 ## Kết hợp với flags
 

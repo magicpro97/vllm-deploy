@@ -5,7 +5,7 @@
 import blessed from "blessed";
 import contrib from "blessed-contrib";
 import { loadInstanceInfo, loadConfig, isWatchdogRunning, type InstanceInfo } from "./config";
-import { getInstanceMetrics, destroyInstance } from "./vastai";
+import { getInstanceMetrics, destroyInstance, getLogs } from "./vastai";
 import { getRecentSessionStats, type ClaudeStats } from "./claude-stats";
 import type { CliArgs } from "./args";
 
@@ -57,7 +57,7 @@ export async function startDashboard(opts: {
     title: `vLLM Dashboard — ${info.instanceId}`,
   });
 
-  const grid = new contrib.grid({ rows: 12, cols: 12, screen });
+  const grid = new contrib.grid({ rows: 13, cols: 12, screen });
 
   // === Row 0-2: Header + Time/Budget ===
   const headerBox = grid.set(0, 0, 2, 6, blessed.box, {
@@ -140,8 +140,8 @@ export async function startDashboard(opts: {
     content: "",
   });
 
-  // === Row 8-10: Latency sparkline + Settings ===
-  const latencyLine = grid.set(8, 0, 3, 8, contrib.sparkline, {
+  // === Row 8-9: Latency sparkline + Settings (compact) ===
+  const latencyLine = grid.set(8, 0, 2, 6, contrib.sparkline, {
     label: " ⚡ Latency (ms) ",
     tags: true,
     border: { type: "line" },
@@ -152,7 +152,7 @@ export async function startDashboard(opts: {
     },
   });
 
-  const settingsBox = grid.set(8, 8, 3, 4, blessed.box, {
+  const settingsBox = grid.set(8, 6, 2, 6, blessed.box, {
     label: " ⚙ Settings ",
     tags: true,
     border: { type: "line" },
@@ -160,9 +160,28 @@ export async function startDashboard(opts: {
     content: formatSettings(state, state.info, opts.args),
   });
 
-  // === Row 10-12: Log ===
-  const logBox = grid.set(11, 0, 1, 12, blessed.box, {
-    label: " [q] Quit  [s] Stop instance  [r] Refresh ",
+  // === Row 10-11: Realtime Logs ===
+  const logsPanel = grid.set(10, 0, 2, 12, blessed.log, {
+    label: " 📜 Logs ",
+    tags: true,
+    border: { type: "line" },
+    style: {
+      border: { fg: "green" },
+      label: { fg: "green", bold: true },
+      fg: "gray",
+    },
+    scrollable: true,
+    alwaysScroll: true,
+    scrollbar: {
+      style: { bg: "blue" },
+    },
+    mouse: true,
+    keys: true,
+  });
+
+  // === Row 12: Hotkeys ===
+  const logBox = grid.set(12, 0, 1, 12, blessed.box, {
+    label: " [q] Quit  [s] Stop instance  [r] Refresh  [l] Logs ",
     tags: true,
     border: { type: "line" },
     style: {
@@ -170,7 +189,7 @@ export async function startDashboard(opts: {
       label: { fg: "gray" },
       fg: "gray",
     },
-    content: " Press q to quit, s to stop instance and exit",
+    content: " Press q to quit, s to stop, r to refresh, l to fetch logs",
   });
 
   // Key bindings
@@ -201,9 +220,26 @@ export async function startDashboard(opts: {
     void updateAll();
   });
 
+  screen.key(["l"], () => {
+    logBox.setContent(" 📜 Fetching logs...");
+    screen.render();
+    void getLogs(info.instanceId, 30).then((logs: string) => {
+      const lines = logs.split("\n").filter((l: string) => l.trim());
+      for (const line of lines) {
+        logsPanel.log(line.substring(0, 200));
+      }
+      logBox.setContent(" Press q to quit, s to stop, l to refresh logs");
+      screen.render();
+    }).catch(() => {
+      logBox.setContent(" ❌ Failed to fetch logs");
+      screen.render();
+    });
+  });
+
   // Periodic updates
   const POLL_INTERVAL = 5_000;
   const latencyHistory: number[] = [];
+  const lastLogLines = new Set<string>();
 
   async function updateAll() {
     // Update time/budget
@@ -268,6 +304,25 @@ export async function startDashboard(opts: {
         const claudeStats = getRecentSessionStats(120);
         if (claudeStats) {
           state.claudeStats = claudeStats;
+        }
+      } catch {}
+    }
+
+    // Fetch realtime logs (every 15s to avoid spamming)
+    if (Math.round(state.elapsedHours * 3600 / 5) % 3 === 0) {
+      try {
+        const logs = await getLogs(state.info.instanceId, 20);
+        const newLines = logs.split("\n").filter((l: string) => l.trim());
+        for (const line of newLines) {
+          const trimmed = line.substring(0, 200);
+          if (!lastLogLines.has(trimmed)) {
+            lastLogLines.add(trimmed);
+            if (lastLogLines.size > 200) {
+              const first = lastLogLines.values().next().value;
+              if (first) lastLogLines.delete(first);
+            }
+            logsPanel.log(trimmed);
+          }
         }
       } catch {}
     }
