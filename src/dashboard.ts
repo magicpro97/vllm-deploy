@@ -547,7 +547,7 @@ function sorted(arr: number[]): number[] {
   return [...arr].sort((a, b) => a - b);
 }
 
-async function autoStop(state: DashboardState, screen: any) {
+async function autoStop(state: DashboardState, screen: blessed.Widgets.Screen) {
   try {
     await destroyInstance(Number(state.info.instanceId));
     const { removeInstanceInfo } = await import("./config");
