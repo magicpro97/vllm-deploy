@@ -77,21 +77,53 @@ HF_TOKEN=hf_xxxxxxxxxxxxxxxx
 ## Instance tự tắt
 
 ### Nguyên nhân
-- Dùng **spot** instance → bị preempt
+- Dùng **spot** instance → bị preempt (phổ biến nhất)
 - Hết credits
 - Provider tắt máy
 
 ### Giải pháp
 ```bash
-# Dùng on-demand (default, không cần flag)
+# 1. Dùng spot + auto-recover (khuyên dùng)
+bun run deploy start --spot --auto-recover
+# → Tự tìm GPU mới và deploy lại khi bị gián đoạn
+
+# 2. Dùng on-demand (không bị gián đoạn)
 bun run deploy start
 
-# Hoặc spot + watchdog tự restart
-bun run deploy start --spot --service
+# 3. Spot + watchdog + auto-recover (service mode)
+bun run deploy start --spot --service --auto-recover
 
-# Nạp thêm credits
+# 4. Nạp thêm credits nếu hết tiền
 # Vast.ai → Account → Add Credits
 ```
+
+## Spot auto-recover không hoạt động
+
+### Triệu chứng
+Instance bị gián đoạn nhưng không tự phục hồi.
+
+### Nguyên nhân & Giải pháp
+
+1. **Chưa bật `--auto-recover`:**
+   ```bash
+   bun run deploy start --spot --auto-recover
+   ```
+
+2. **Đã hết 10 lần recovery:**
+   - Watchdog giới hạn tối đa 10 lần recovery
+   - Restart lại: `bun run deploy start --spot --auto-recover`
+
+3. **Không tìm được GPU phù hợp:**
+   - Marketplace hết GPU cùng loại
+   - Thử GPU khác: `bun run deploy start --spot --auto-recover --gpu RTX3090`
+
+4. **Cooldown 5 phút:**
+   - Giữa mỗi lần recovery có 5 phút chờ
+   - Kiểm tra dashboard/logs để thấy countdown
+
+5. **Budget/hours đã hết:**
+   - Budget/hours tính tích lũy qua các lần recovery
+   - Tăng budget: `--budget 5.00`
 
 ---
 
@@ -184,4 +216,24 @@ bun run deploy start --service
 bun run deploy logs
 
 # Thường do OOM → giảm context length hoặc đổi GPU lớn hơn
+```
+
+---
+
+## Dashboard issues
+
+### Dashboard lag với nhiều logs
+
+Dashboard sử dụng **virtual scroll** — chỉ render dòng hiển thị (viewport slicing). Nếu vẫn lag:
+- Buffer tối đa 500 dòng, dòng cũ tự xóa
+- Dùng mouse wheel để scroll logs
+- Auto-scroll resume khi scroll về cuối
+
+### Dashboard hiện sai uptime
+
+Dashboard lấy uptime thực tế từ Vast.ai API (`metrics.uptime`), không phải local time. Nếu hiện sai:
+```bash
+# Check API response trực tiếp
+vastai show instances --raw
+# Xem field `duration` — uptime tính bằng giây
 ```

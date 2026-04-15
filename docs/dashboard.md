@@ -105,16 +105,19 @@ block-beta
 
 ### ⚙ Settings
 - Model, strategy, GPU preference
-- Instance type, $/hr
+- Instance type (on-demand/spot), $/hr
 - Hours/budget limits
-- Watchdog status
+- Watchdog status, auto-recover status
 - Context length, prefix caching
+- **Spot instance:** trạng thái (●running / ●interrupted), tiết kiệm ước tính vs on-demand
 
-### 📜 Realtime Logs
+### 📜 Realtime Logs (Virtual Scroll)
 - Logs từ instance (vLLM, supervisor)
-- Scrollable — dùng mouse hoặc arrow keys
+- **Virtual scroll** — chỉ render dòng hiển thị, buffer tối đa 500 dòng
+- Mouse wheel scroll up/down, auto-scroll resume khi scroll về cuối
 - Auto-fetch mỗi 15 giây
 - Deduplicated — không hiện dòng trùng
+- Dòng dài tự truncate (250 chars) để tránh lag
 
 ## Hotkeys
 
@@ -138,9 +141,22 @@ bun run deploy dashboard --budget 1.50
 bun run deploy dashboard --hours 4 --budget 2.00
 ```
 
+## Spot Instance trên Dashboard
+
+Khi dùng `--spot`, dashboard hiển thị thêm:
+
+- **Header:** cảnh báo đỏ `⚠ INTERRUPTED` nếu instance bị gián đoạn
+- **Time panel:** uptime thực tế từ Vast.ai API (chỉ tính thời gian chạy)
+- **Settings panel:**
+  - Trạng thái instance: `●running` (xanh) hoặc `●interrupted` (đỏ)
+  - Tiết kiệm spot: `Saved: ~$X.XX vs on-demand`
+  - Auto-recover status (nếu bật `--auto-recover`)
+- **Logs:** thông báo recovery khi instance được phục hồi tự động
+
 ## Tips
 
 - Dashboard **auto-refresh** mỗi 5 giây
 - Mở dashboard sau khi API ready (`bun run deploy test` trước)
 - Nếu panels trống → model chưa load xong, đợi vài phút
 - Dashboard chạy trên terminal — cần terminal đủ rộng (≥80 cols, ≥24 rows)
+- **Spot users:** Dashboard tự phát hiện interruption, không cần monitor thủ công

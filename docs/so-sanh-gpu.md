@@ -5,16 +5,18 @@
 > vLLM mặc định load BF16. Dùng `--quantization` flag nếu cần quantize.
 > Default config: `--max-model-len 32768 --gpu-memory-utilization 0.95 --enable-prefix-caching`
 
-| GPU | VRAM | Giá Vast.ai | Tốc độ (est.) | Context khuyên | Ghi chú |
-|-----|------|------------|---------------|----------------|---------|
-| **RTX 3090** | 24GB | $0.20-0.35/hr | ~15-20 tok/s | 8K-16K | 💰 Rẻ nhất |
-| **RTX 4090** | 24GB | $0.30-0.50/hr | ~25-35 tok/s | 16K-32K | ⭐ Best value |
-| **A6000** | 48GB | $0.50-0.80/hr | ~20-25 tok/s | 32K+ | Context dài |
-| **RTX 5090** | 32GB | $0.50-0.80/hr | ~35-45 tok/s | 16K-32K | 🏆 Nhanh nhất |
-| **L4** | 24GB | $0.40-0.60/hr | ~15-20 tok/s | 8K-16K | Datacenter |
-| **A100 40GB** | 40GB | $0.80-1.20/hr | ~30-40 tok/s | 32K | Production |
-| **A100 80GB** | 80GB | $1.20-2.00/hr | ~30-40 tok/s | 64K+ | Max context |
-| **H100** | 80GB | $2.00-3.50/hr | ~50-70 tok/s | 64K+ | Fastest |
+| GPU | VRAM | On-demand | Spot (~50-65% rẻ hơn) | Tốc độ (est.) | Context khuyên | Ghi chú |
+|-----|------|----------|---------------------|---------------|----------------|---------|
+| **RTX 3090** | 24GB | $0.20-0.35/hr | $0.10-0.18/hr | ~15-20 tok/s | 8K-16K | 💰 Rẻ nhất |
+| **RTX 4090** | 24GB | $0.30-0.50/hr | $0.15-0.25/hr | ~25-35 tok/s | 16K-32K | ⭐ Best value |
+| **A6000** | 48GB | $0.50-0.80/hr | $0.25-0.40/hr | ~20-25 tok/s | 32K+ | Context dài |
+| **RTX 5090** | 32GB | $0.50-0.80/hr | $0.25-0.40/hr | ~35-45 tok/s | 16K-32K | 🏆 Nhanh nhất |
+| **L4** | 24GB | $0.40-0.60/hr | $0.20-0.30/hr | ~15-20 tok/s | 8K-16K | Datacenter |
+| **A100 40GB** | 40GB | $0.80-1.20/hr | $0.40-0.60/hr | ~30-40 tok/s | 32K | Production |
+| **A100 80GB** | 80GB | $1.20-2.00/hr | $0.60-1.00/hr | ~30-40 tok/s | 64K+ | Max context |
+| **H100** | 80GB | $2.00-3.50/hr | $1.00-1.75/hr | ~50-70 tok/s | 64K+ | Fastest |
+
+> 💡 Dùng `--spot --auto-recover` để tự động phục hồi khi spot bị gián đoạn.
 
 > ⚠️ Tốc độ ước tính, thực tế phụ thuộc batch size, prompt length, quantization.
 

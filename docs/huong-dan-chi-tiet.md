@@ -47,9 +47,10 @@ bun run deploy start
 bun run deploy start --cheap           # GPU rẻ nhất
 bun run deploy start --fast            # GPU nhanh nhất
 bun run deploy start --gpu RTX4090     # Chọn GPU cụ thể
-bun run deploy start --spot            # Spot instance (rẻ ~50%)
+bun run deploy start --spot            # Spot instance (rẻ ~50-65%)
+bun run deploy start --spot --auto-recover  # Spot + tự phục hồi
 bun run deploy start --hours 2         # Tự tắt sau 2h
-bun run deploy start --budget 1.00     # Tự tắt khi đạt $1
+bun run deploy start --budget 1.00     # Tự tắt khi đạt $1 (auto spot nếu ≤$5)
 
 # 2. Đợi ~5-15 phút (boot + load model)
 
@@ -78,6 +79,9 @@ bun run deploy info
 ```bash
 # Chạy background — tự restart khi instance die
 bun run deploy start --service
+
+# Spot + watchdog + auto-recover = combo tiết kiệm nhất
+bun run deploy start --service --spot --auto-recover
 
 # Check watchdog status
 bun run deploy watch
@@ -113,9 +117,10 @@ bun run deploy stop
 | `--fast` | Tìm GPU nhanh nhất | |
 | `--best` | GPU tốt nhất (quality) | |
 | `--gpu <name>` | Chọn GPU cụ thể (RTX4090, A100...) | |
-| `--spot` | Dùng spot/interruptible instance | |
-| `--hours <n>` | Auto-shutdown sau n giờ | |
-| `--budget <n>` | Auto-shutdown khi đạt $n | |
+| `--spot` | Dùng spot/interruptible instance (rẻ ~50-65%) | |
+| `--auto-recover` | Tự phục hồi khi spot bị gián đoạn | |
+| `--hours <n>` | Auto-shutdown sau n giờ (tính uptime thực tế) | |
+| `--budget <n>` | Auto-shutdown khi đạt $n (tích lũy qua recovery) | |
 | `--service` | Chạy watchdog background mode | |
 | `--dry-run` | Chỉ tìm GPU, không deploy | |
 | `--auto` | Skip confirmation, deploy ngay | |
