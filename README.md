@@ -143,9 +143,10 @@ VLLM_MODEL=Qwen/Qwen3-32B
 ## Tài liệu
 
 - 📖 [Hướng dẫn chi tiết](docs/huong-dan-chi-tiet.md)
+- 📊 [Dashboard](docs/dashboard.md)
 - 💰 [Tối ưu chi phí](docs/toi-uu-chi-phi.md)
 - 🔧 [Troubleshooting](docs/troubleshooting.md)
-- 📊 [So sánh GPU](docs/so-sanh-gpu.md)
+- 🖥️ [So sánh GPU](docs/so-sanh-gpu.md)
 
 ## Tech Stack
 
