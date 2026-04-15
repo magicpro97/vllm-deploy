@@ -1,58 +1,93 @@
-# 🚀 vLLM Deploy — Gemma 4 31B Claude Opus on Vast.ai
+# 🚀 vLLM Deploy — Self-host LLM on Vast.ai
 
-> Self-host **charaf/gemma4-31b-claude-opus-abliterated** trên Vast.ai với chi phí **~$18/tháng** (2h/ngày).  
+> CLI tool để deploy **vLLM** trên [Vast.ai](https://cloud.vast.ai) — tìm GPU rẻ nhất, deploy 1 lệnh, monitor real-time.  
 > OpenAI-compatible API, dùng được với Claude Code, Cursor, Continue, hoặc bất kỳ client nào.
+
+## ✨ Features
+
+- 🔍 **Smart GPU search** — tự tìm GPU rẻ nhất trên marketplace (`--cheap`, `--fast`, `--best`)
+- 🚀 **1-command deploy** — start, stop, status, SSH, logs
+- 📊 **TUI Dashboard** — real-time monitoring CPU/GPU/RAM/Network/Tokens/Latency
+- 💰 **Cost control** — auto-shutdown với `--hours` và `--budget`
+- 🔄 **Service mode** — watchdog tự restart khi instance die
+- ⚡ **Prefix caching** — giảm ~50-70% KV cache cho repeated context
+- 🛡️ **Strict TypeScript + ESLint** — zero errors, production-ready
 
 ## Tại sao?
 
 | So sánh | Chi phí | Model | Giới hạn |
 |---------|---------|-------|----------|
-| **Vast.ai (repo này)** | ~$0.30/hr on-demand | Gemma 4 31B Opus Distill | Không giới hạn |
+| **Vast.ai (repo này)** | ~$0.30/hr on-demand | Bất kỳ HF model | Không giới hạn |
 | OpenAI GPT-4o | $5-20/1M tokens | GPT-4o | Rate limit |
 | Claude Pro | $20/mo | Claude 3.5/Opus | Usage cap |
-| Ollama Cloud Pro | $20/mo | Catalog only | Không custom model |
+| OpenRouter Gemma 4 | $0.14/$0.40 per 1M | Gemma 4 31B (base) | Rate limit |
 
-## Quick Start (5 phút)
+## Quick Start
 
 ### 1. Cài đặt
 
-```powershell
-git clone <repo-url> && cd vllm-deploy
+```bash
+git clone https://github.com/magicpro97/vllm-deploy.git && cd vllm-deploy
+bun install
+
+# Cài Vast.ai CLI
 pip install vastai
 vastai set api-key YOUR_API_KEY
 ```
 
 ### 2. Deploy
 
-```powershell
-# Tìm GPU rẻ nhất + deploy 1 lệnh
-.\deploy.ps1 start
+```bash
+# Tìm GPU rẻ nhất + deploy
+bun run deploy start
+
+# Hoặc với options
+bun run deploy start --cheap          # GPU rẻ nhất
+bun run deploy start --fast           # GPU nhanh nhất
+bun run deploy start --gpu RTX4090    # Chọn GPU cụ thể
+bun run deploy start --spot           # Spot instance (rẻ hơn ~50%)
+bun run deploy start --hours 2        # Tự tắt sau 2h
+bun run deploy start --budget 1.00    # Tự tắt khi đạt $1
 ```
 
-### 3. Dùng
+### 3. Monitor
 
-```powershell
-# Test API
-.\deploy.ps1 test
+```bash
+# TUI Dashboard real-time
+bun run deploy dashboard
 
-# Xem thông tin kết nối
-.\deploy.ps1 info
+# Hoặc quick check
+bun run deploy status
+bun run deploy info
 ```
 
-### 4. Tắt (ngừng tính tiền)
+### 4. Dùng
 
-```powershell
-.\deploy.ps1 stop
+```bash
+# Test API endpoint
+bun run deploy test
+
+# SSH vào instance
+bun run deploy ssh
+
+# Xem logs
+bun run deploy logs
+```
+
+### 5. Tắt (ngừng tính tiền)
+
+```bash
+bun run deploy stop
 ```
 
 ## Cấu hình Claude Code
 
-```powershell
-# Auto-config Claude Code
-.\deploy.ps1 config-claude
+```bash
+# Auto-config Claude Code settings
+bun run deploy config-claude
 ```
 
-Hoặc manual — thêm vào Claude Code settings:
+Hoặc manual — thêm vào `~/.claude/settings.json`:
 
 ```json
 {
@@ -61,6 +96,16 @@ Hoặc manual — thêm vào Claude Code settings:
   "apiKey": "<TOKEN>",
   "model": "charaf/gemma4-31b-claude-opus-abliterated"
 }
+```
+
+## Service Mode (Background)
+
+```bash
+# Chạy watchdog — tự restart khi instance die
+bun run deploy start --service
+
+# Xem trạng thái watchdog
+bun run deploy watch
 ```
 
 ## Chi phí ước tính
@@ -81,11 +126,19 @@ Hoặc manual — thêm vào Claude Code settings:
 - 🔧 [Troubleshooting](docs/troubleshooting.md)
 - 📊 [So sánh GPU](docs/so-sanh-gpu.md)
 
+## Tech Stack
+
+- **Runtime:** [Bun](https://bun.sh)
+- **Language:** TypeScript (strict mode)
+- **TUI:** blessed + blessed-contrib
+- **Linting:** ESLint + typescript-eslint (strictTypeChecked)
+- **vLLM defaults:** 32K context, prefix caching, 95% GPU utilization
+
 ## Yêu cầu
 
+- [Bun](https://bun.sh) 1.0+
 - Tài khoản [Vast.ai](https://cloud.vast.ai) (nạp tối thiểu $10)
 - Python 3.8+ (cho `vastai` CLI)
-- PowerShell 5.1+ (Windows) hoặc Bash (Linux/Mac)
 
 ## License
 
