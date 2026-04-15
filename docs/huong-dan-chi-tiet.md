@@ -103,6 +103,7 @@ bun run deploy stop
 | `bun run deploy status` | Xem instances đang chạy |
 | `bun run deploy info` | Thông tin kết nối |
 | `bun run deploy test` | Test API endpoint |
+| `bun run deploy benchmark` | Đo throughput & concurrency |
 | `bun run deploy search` | Tìm GPU available |
 | `bun run deploy ssh` | SSH vào instance |
 | `bun run deploy logs` | Xem logs |

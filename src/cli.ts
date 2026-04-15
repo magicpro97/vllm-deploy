@@ -624,6 +624,146 @@ async function cmdTest() {
   log.ok("\n✅ API test complete!");
 }
 
+// === Benchmark: test throughput & concurrency ===
+
+interface BenchResult {
+  latencyMs: number;
+  tokens: number;
+  tokPerSec: number;
+  success: boolean;
+  error?: string;
+}
+
+async function singleRequest(
+  apiUrl: string, model: string, headers: Record<string, string>, prompt: string, maxTokens: number,
+): Promise<BenchResult> {
+  const start = Date.now();
+  try {
+    const res = await fetch(`${apiUrl}/chat/completions`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: maxTokens,
+        temperature: 0,
+      }),
+      signal: AbortSignal.timeout(120_000),
+    });
+    const data = (await res.json()) as {
+      usage?: { completion_tokens?: number };
+      error?: { message?: string };
+    };
+    const elapsed = Date.now() - start;
+    if (data.error) return { latencyMs: elapsed, tokens: 0, tokPerSec: 0, success: false, error: data.error.message };
+    const tokens = data.usage?.completion_tokens ?? 0;
+    return { latencyMs: elapsed, tokens, tokPerSec: tokens / (elapsed / 1000), success: true };
+  } catch (e: unknown) {
+    return { latencyMs: Date.now() - start, tokens: 0, tokPerSec: 0, success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+function percentile(arr: number[], p: number): number {
+  const sorted = [...arr].sort((a, b) => a - b);
+  const idx = Math.ceil((p / 100) * sorted.length) - 1;
+  return sorted[Math.max(0, idx)] ?? 0;
+}
+
+async function cmdBenchmark() {
+  log.info("\n📊 Benchmark — đo throughput & concurrency\n");
+
+  const info = loadInstanceInfo();
+  if (!info) { log.err("❌ Chưa deploy instance. Dùng: bun run deploy start"); return; }
+
+  const apiUrl = info.apiUrl;
+  const model = info.model ?? config.model;
+  const headers: Record<string, string> = {};
+  if (info.token) headers["Authorization"] = `Bearer ${info.token}`;
+
+  // Phase 1: Single request baseline
+  log.warn("1️⃣  Single request baseline...");
+  const baseline = await singleRequest(apiUrl, model, headers, "Count from 1 to 20.", 100);
+  if (!baseline.success) {
+    log.err(`  ❌ API lỗi: ${baseline.error}`);
+    log.warn("  💡 Đảm bảo model đã load xong: bun run deploy test");
+    return;
+  }
+  log.ok(`  ✅ Latency: ${baseline.latencyMs}ms | ${baseline.tokens} tokens | ${baseline.tokPerSec.toFixed(1)} tok/s`);
+
+  // Phase 2: Concurrent requests (1, 2, 4, 8, 16)
+  log.warn("\n2️⃣  Concurrent requests...\n");
+
+  const concurrencyLevels = [1, 2, 4, 8, 16];
+  const prompt = "Write a short poem about programming in exactly 4 lines.";
+  const maxTokens = 100;
+
+  const rows: string[][] = [];
+
+  for (const c of concurrencyLevels) {
+    const promises: Promise<BenchResult>[] = [];
+    for (let i = 0; i < c; i++) {
+      promises.push(singleRequest(apiUrl, model, headers, prompt, maxTokens));
+    }
+    const results = await Promise.all(promises);
+    const successes = results.filter(r => r.success);
+    const failures = results.filter(r => !r.success);
+
+    if (successes.length === 0) {
+      log.warn(`  c=${c}: tất cả ${c} requests failed → dừng benchmark`);
+      break;
+    }
+
+    const latencies = successes.map(r => r.latencyMs);
+    const totalTokens = successes.reduce((sum, r) => sum + r.tokens, 0);
+    const elapsed = Math.max(...latencies);
+    const throughput = totalTokens / (elapsed / 1000);
+
+    rows.push([
+      String(c),
+      `${successes.length}/${c}`,
+      `${Math.round(percentile(latencies, 50))}ms`,
+      `${Math.round(percentile(latencies, 95))}ms`,
+      throughput.toFixed(1),
+      (successes.reduce((s, r) => s + r.tokPerSec, 0) / successes.length).toFixed(1),
+    ]);
+
+    log.dim(`  c=${c}: p50=${Math.round(percentile(latencies, 50))}ms, throughput=${throughput.toFixed(1)} tok/s${failures.length ? `, ${failures.length} failed` : ""}`);
+
+    // Stop if >50% failed
+    if (failures.length > c / 2) {
+      log.warn(`  ⚠️ >50% failed tại c=${c} → đây là giới hạn`);
+      break;
+    }
+  }
+
+  // Summary table
+  log.info("\n📊 Kết quả:");
+  console.log();
+  table(
+    ["Concurrent", "Success", "P50 Latency", "P95 Latency", "Throughput (tok/s)", "Avg tok/s/req"],
+    rows,
+  );
+
+  // Phase 3: Capacity estimate
+  log.info("\n💡 Ước tính khả năng chịu tải:");
+  const baselineTokPerSec = baseline.tokPerSec;
+  log.dim(`  • Single request: ${baselineTokPerSec.toFixed(1)} tok/s`);
+  log.dim(`  • Claude Code (1 session): ~${Math.round(baselineTokPerSec)} tok/s — thoải mái ✅`);
+
+  const estimatedMaxConcurrent = Math.max(1, Math.floor(baselineTokPerSec / 5));
+  log.dim(`  • Ước tính max concurrent sessions: ~${estimatedMaxConcurrent} (≥5 tok/s mỗi session)`);
+
+  if (estimatedMaxConcurrent <= 2) {
+    log.warn("  → Chỉ nên dùng 1-2 Claude Code sessions");
+  } else if (estimatedMaxConcurrent <= 5) {
+    log.ok(`  → Thoải mái 2-3 sessions, max ~${estimatedMaxConcurrent}`);
+  } else {
+    log.ok(`  → Có thể chạy ${Math.min(estimatedMaxConcurrent, 10)}+ sessions đồng thời`);
+  }
+
+  log.ok("\n✅ Benchmark complete!");
+}
+
 async function cmdSsh() {
   const info = loadInstanceInfo();
   if (info?.ip && info.sshPort) {
@@ -746,6 +886,7 @@ function cmdHelp() {
     status          Xem instances đang chạy
     info            Hiện thông tin kết nối
     test            Test API endpoint
+    benchmark       📊 Đo throughput & concurrent capacity (alias: bench)
     dashboard       📊 TUI real-time dashboard (alias: dash)
     ssh             SSH vào instance
     config-claude   Cập nhật Claude Code settings → vLLM
@@ -786,6 +927,7 @@ function cmdHelp() {
     \x1b[90mbun run start --spot --auto-recover -y   # Spot + tự phục hồi\x1b[0m
     \x1b[90mVLLM_HOURS=2 VLLM_AUTO=1 bun run start  # Dùng env vars\x1b[0m
     \x1b[90mbun run deploy watch --hours 1 --service # Background watchdog\x1b[0m
+    \x1b[90mbun run deploy benchmark                # Đo throughput & concurrency\x1b[0m
     \x1b[90mbun run deploy stop                      # Tắt tất cả\x1b[0m
 
   \x1b[32mCHI PHÍ: ~$0.20-0.50/hr | ~$11-35/tháng (2h/ngày)\x1b[0m
@@ -838,6 +980,8 @@ const commands: Record<string, () => Promise<void> | void> = {
   status: cmdStatus,
   info: cmdInfo,
   test: cmdTest,
+  benchmark: cmdBenchmark,
+  bench: cmdBenchmark,
   ssh: cmdSsh,
   "config-claude": cmdConfigClaude,
   logs: cmdLogs,

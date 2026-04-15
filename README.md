@@ -60,6 +60,9 @@ bun run deploy start --budget 1.00    # Tự tắt khi đạt $1 (auto spot nế
 # TUI Dashboard real-time
 bun run deploy dashboard
 
+# Benchmark throughput & concurrency
+bun run deploy benchmark
+
 # Hoặc quick check
 bun run deploy status
 bun run deploy info
