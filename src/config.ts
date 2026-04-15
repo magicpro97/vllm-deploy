@@ -28,7 +28,7 @@ export interface InstanceInfo {
 const DEFAULT_CONFIG: Config = {
   vastaiApiKey: "",
   model: "charaf/gemma4-31b-claude-opus-abliterated",
-  vllmArgs: "--max-model-len 8192 --gpu-memory-utilization 0.95",
+  vllmArgs: "--max-model-len 32768 --gpu-memory-utilization 0.95 --enable-prefix-caching",
   gpuPrefer: "RTX 4090",
   gpuMinVram: 24,
   gpuMaxPrice: 0.5,
