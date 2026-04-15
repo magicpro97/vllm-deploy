@@ -2,46 +2,79 @@
 
 ## 1. Chọn GPU đúng
 
-| Nhu cầu | GPU | Giá | Lý do |
-|---------|-----|-----|-------|
-| Rẻ nhất | RTX 3090 | ~$0.20-0.35/hr | Đủ 24GB VRAM |
-| Best value | RTX 4090 | ~$0.30-0.50/hr | Nhanh hơn 3090 ~30% |
-| Context dài | A100 40GB | ~$0.80-1.20/hr | 40GB = context lớn hơn |
-| NVFP4 quality | RTX 5090 | ~$0.50-0.80/hr | Cần Blackwell GPU |
-
-Sửa `.env` để đổi GPU:
-```bash
-GPU_PREFER=RTX 3090    # Rẻ nhất
-GPU_MAX_PRICE=0.35     # Max price/hr
-```
-
-## 2. On-demand vs Interruptible
-
-| Loại | Giá | Rủi ro |
-|------|-----|--------|
-| **On-demand** | Cao hơn ~30% | Không bị gián đoạn |
-| **Interruptible** | Rẻ hơn | Có thể bị ngắt bất cứ lúc nào |
-
-**Khuyên:** Dùng on-demand cho công việc quan trọng. Interruptible cho test/thí nghiệm.
+| Nhu cầu | CLI Flag | Giá | Lý do |
+|---------|----------|-----|-------|
+| Rẻ nhất | `--cheap` hoặc `--gpu RTX3090` | ~$0.20-0.35/hr | Đủ 24GB VRAM |
+| Best value | `--cheap` (default) | ~$0.30-0.50/hr | Auto-pick rẻ nhất |
+| Nhanh nhất | `--fast` | ~$0.50-0.80/hr | RTX 5090/A100 |
+| Context dài | `--gpu A100` | ~$0.80-1.20/hr | 40-80GB VRAM |
 
 ```bash
-INSTANCE_TYPE=interruptible    # Tiết kiệm
+# Ví dụ
+bun run deploy start --cheap              # Rẻ nhất available
+bun run deploy start --gpu RTX3090        # Chọn cụ thể
+bun run deploy start --fast --budget 2    # Nhanh nhất, max $2
 ```
 
-## 3. Network Storage (cache model)
+## 2. On-demand vs Spot (Interruptible)
 
-**Vấn đề:** Mỗi lần tạo instance mới, model phải download lại (~20GB = 10-15 phút).
+| Loại | Flag | Giá | Rủi ro |
+|------|------|-----|--------|
+| **On-demand** | (default) | Cao hơn ~30% | Không bị gián đoạn |
+| **Spot** | `--spot` | Rẻ hơn ~50% | Có thể bị ngắt bất cứ lúc nào |
+
+**Khuyên:** On-demand cho công việc quan trọng. Spot cho test/thí nghiệm.
+
+```bash
+bun run deploy start --spot              # Spot instance
+bun run deploy start --spot --service    # Spot + watchdog auto-restart
+```
+
+## 3. Auto-shutdown (tránh quên tắt!)
+
+```bash
+# Tự tắt sau 2 giờ
+bun run deploy start --hours 2
+
+# Tự tắt khi chi phí đạt $1
+bun run deploy start --budget 1.00
+
+# Kết hợp cả hai
+bun run deploy start --hours 4 --budget 2.00
+```
+
+> 💡 Dashboard hiển thị countdown thời gian và budget còn lại.
+
+## 4. Prefix Caching (mặc định bật)
+
+vLLM default bật `--enable-prefix-caching`:
+- Cache KV cho repeated prefix (system prompt, tool definitions)
+- Tiết kiệm ~50-70% KV cache memory từ request thứ 2+
+- Đặc biệt hiệu quả với Claude Code (system prompt lặp lại)
+
+## 5. Service Mode (Watchdog)
+
+```bash
+# Watchdog tự restart khi instance die
+bun run deploy start --service --spot
+
+# Dùng spot + watchdog = rẻ nhất + tự recovery
+```
+
+## 6. Network Storage (cache model)
+
+**Vấn đề:** Mỗi lần tạo instance mới, model phải download lại (~20-60GB = 10-30 phút).
 
 **Giải pháp:** Vast.ai Network Storage
 
 ```
-Web UI → Storage → Create Volume → 30GB
-Cost: ~$0.60/tháng
+Web UI → Storage → Create Volume → 70GB
+Cost: ~$1.50/tháng
 ```
 
-Mount vào instance → model cache persistent → boot nhanh 1-2 phút thay vì 15 phút.
+Mount vào instance → model cache persistent → boot nhanh 1-2 phút.
 
-## 4. Custom Template
+## 7. Custom Template
 
 Sau khi setup xong lần đầu:
 
@@ -49,26 +82,13 @@ Sau khi setup xong lần đầu:
 2. Lưu lại tất cả config
 3. Lần sau: **My Templates** → 1-click RENT
 
-## 5. Budget Alert
-
-**QUAN TRỌNG:** Tránh quên tắt instance!
+## 8. Vast.ai Budget Alert
 
 ```
 Vast.ai → Account → Billing → Daily spending limit: $5/day
 ```
 
-Nếu vượt $5/day → Vast.ai tự cảnh báo.
-
-## 6. Auto-shutdown
-
-Trong instance, set cron job tự tắt:
-
-```bash
-# Tự destroy sau 8 giờ
-echo "0 */8 * * * vastai stop instance \$CONTAINER_ID" | crontab -
-```
-
-## 7. Bảng chi phí ước tính
+## 9. Bảng chi phí ước tính
 
 | Kịch bản | GPU | Giờ/ngày | Ngày/tháng | Storage | Tổng/tháng |
 |----------|-----|---------|-----------|---------|-----------|
@@ -78,13 +98,13 @@ echo "0 */8 * * * vastai stop instance \$CONTAINER_ID" | crontab -
 | **Full-time** | RTX 4090 | 8h | 22 | $0.60 | **~$71** |
 | **24/7** | RTX 4090 | 24h | 30 | $0.60 | **~$290** |
 
-## 8. So sánh alternatives
+## 10. So sánh alternatives
 
 | Dịch vụ | Cost/tháng | Model | Giới hạn |
 |---------|-----------|-------|----------|
-| **Vast.ai (2h/day)** | ~$18 | Custom 31B | Không |
+| **Vast.ai (2h/day)** | ~$18 | Custom HF model | Không |
+| OpenRouter Gemma 4 | ~$0.14/$0.40 per 1M tok | Gemma 4 31B (base) | Rate limit |
+| Claude Max 5x | $100 | Claude Opus 4.6 | Usage cap |
 | OpenAI API | Pay-per-token | GPT-4o | Rate limit |
-| Claude Pro | $20 | Claude 3.5 | Usage cap |
-| Ollama Cloud Pro | $20 | Catalog only | Không custom |
 | RunPod | ~$30+ | Custom | Không |
 | Self-host (RTX 4090) | $0 (đã có GPU) | Custom | Hardware |

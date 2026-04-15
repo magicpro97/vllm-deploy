@@ -3,15 +3,15 @@
 ## Model không load được
 
 ### Triệu chứng
-`bun run test:api` trả về lỗi hoặc timeout.
+`bun run deploy test` trả về lỗi hoặc timeout.
 
 ### Giải pháp
 ```bash
 # 1. Check logs
-bun run logs
+bun run deploy logs
 
 # 2. SSH vào xem chi tiết
-bun run ssh
+bun run deploy ssh
 supervisorctl status vllm
 cat /var/log/supervisor/vllm-*.log | tail -50
 
@@ -25,8 +25,8 @@ cat /var/log/supervisor/vllm-*.log | tail -50
 
 **OOM (Out of Memory):**
 ```bash
-# Giảm context length
-VLLM_ARGS=--max-model-len 4096 --gpu-memory-utilization 0.95
+# Giảm context length trong .env
+VLLM_ARGS=--max-model-len 8192 --gpu-memory-utilization 0.95 --enable-prefix-caching
 
 # Hoặc dùng model nhỏ hơn
 VLLM_MODEL=google/gemma-4-12b-it
@@ -49,17 +49,17 @@ HF_TOKEN=hf_xxxxxxxxxxxxxxxx
 
 1. **Check instance status:**
    ```bash
-   bun run status
+   bun run deploy status
    # actual_status phải là "running"
    ```
 
 2. **Model chưa load xong:**
    ```bash
-   bun run logs
+   bun run deploy logs
    # Tìm dòng "INFO: Application startup complete"
    ```
 
-3. **FPT firewall chặn:**
+3. **Corporate firewall chặn:**
    ```bash
    # Dùng SSH tunnel thay vì direct connect
    ssh -N -L 8000:localhost:18000 -p <SSH_PORT> root@<VAST_IP>
@@ -68,7 +68,7 @@ HF_TOKEN=hf_xxxxxxxxxxxxxxxx
 
 4. **Port mapping sai:**
    ```bash
-   bun run info
+   bun run deploy info
    # Check API port — Vast.ai map port ngoài khác port trong
    ```
 
@@ -77,14 +77,17 @@ HF_TOKEN=hf_xxxxxxxxxxxxxxxx
 ## Instance tự tắt
 
 ### Nguyên nhân
-- Dùng **interruptible** instance → bị preempt
+- Dùng **spot** instance → bị preempt
 - Hết credits
 - Provider tắt máy
 
 ### Giải pháp
 ```bash
-# Đổi sang on-demand
-INSTANCE_TYPE=on-demand
+# Dùng on-demand (default, không cần flag)
+bun run deploy start
+
+# Hoặc spot + watchdog tự restart
+bun run deploy start --spot --service
 
 # Nạp thêm credits
 # Vast.ai → Account → Add Credits
@@ -96,12 +99,34 @@ INSTANCE_TYPE=on-demand
 
 ### Phòng tránh
 ```bash
-# Set budget alert
-# Vast.ai → Account → Billing → Daily limit: $5
+# Auto-shutdown sau 2 giờ
+bun run deploy start --hours 2
 
-# Set auto-shutdown cron (trong instance)
-bun run ssh
-echo "0 22 * * * vastai stop instance \$CONTAINER_ID" | crontab -
+# Auto-shutdown khi đạt budget
+bun run deploy start --budget 1.00
+
+# Set budget alert trên Vast.ai
+# Vast.ai → Account → Billing → Daily limit: $5
+```
+
+> 💡 Dashboard hiển thị countdown thời gian và budget còn lại.
+
+---
+
+## Dashboard không hiển thị data
+
+### Triệu chứng
+Dashboard mở nhưng tất cả panels trống.
+
+### Giải pháp
+```bash
+# Check có instance đang chạy không
+bun run deploy status
+
+# Dashboard cần instance đang chạy + API ready
+# Nếu vừa deploy, đợi model load xong rồi mở dashboard
+bun run deploy test    # Confirm API ready
+bun run deploy dashboard
 ```
 
 ---
@@ -123,17 +148,40 @@ CUDA error: no kernel image is available for execution on the device
 
 ### Kiểm tra
 ```bash
-bun run ssh
-# Trong instance:
+# Dùng dashboard để monitor real-time
+bun run deploy dashboard
+
+# Hoặc SSH vào check
+bun run deploy ssh
 nvidia-smi                    # Check GPU utilization
-vllm chat --url http://localhost:18000/v1   # Test interactive
 ```
 
 ### Tối ưu
 ```bash
-# Tăng GPU utilization
-VLLM_ARGS=--max-model-len 8192 --gpu-memory-utilization 0.95
+# Prefix caching đã bật mặc định
+# Nếu cần thêm tốc độ, thử speculative decoding:
+VLLM_ARGS=--max-model-len 32768 --gpu-memory-utilization 0.95 --enable-prefix-caching --speculative-model google/gemma-4-1b-it --num-speculative-tokens 5
+```
 
-# Bật speculative decoding (nếu hỗ trợ)
-VLLM_ARGS=--max-model-len 8192 --gpu-memory-utilization 0.95 --speculative-model google/gemma-4-1b-it --num-speculative-tokens 5
+---
+
+## Service mode / Watchdog issues
+
+### Watchdog không restart
+
+```bash
+# Check watchdog PID
+bun run deploy watch
+
+# Nếu watchdog crashed, restart manual:
+bun run deploy start --service
+```
+
+### Instance restart loop
+
+```bash
+# Check logs để xem tại sao instance fail
+bun run deploy logs
+
+# Thường do OOM → giảm context length hoặc đổi GPU lớn hơn
 ```

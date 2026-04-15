@@ -10,7 +10,7 @@
 ### 2. Setup
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/magicpro97/vllm-deploy.git
 cd vllm-deploy
 bun install
 cp .env.example .env
@@ -41,37 +41,84 @@ bun run deploy search    # Test tìm GPU
 
 ```bash
 # 1. Deploy (tự tìm GPU rẻ nhất)
-bun run start
+bun run deploy start
+
+# Hoặc với options
+bun run deploy start --cheap           # GPU rẻ nhất
+bun run deploy start --fast            # GPU nhanh nhất
+bun run deploy start --gpu RTX4090     # Chọn GPU cụ thể
+bun run deploy start --spot            # Spot instance (rẻ ~50%)
+bun run deploy start --hours 2         # Tự tắt sau 2h
+bun run deploy start --budget 1.00     # Tự tắt khi đạt $1
 
 # 2. Đợi ~5-15 phút (boot + load model)
 
 # 3. Check API ready
-bun run test:api
+bun run deploy test
 
-# 4. Lấy thông tin kết nối
-bun run info
+# 4. Xem dashboard real-time
+bun run deploy dashboard
+```
+
+### Monitor
+
+```bash
+# TUI Dashboard — GPU/CPU/RAM/Network/Tokens/Latency
+bun run deploy dashboard
+
+# Quick status check
+bun run deploy status
+
+# Thông tin kết nối
+bun run deploy info
+```
+
+### Service Mode (Watchdog)
+
+```bash
+# Chạy background — tự restart khi instance die
+bun run deploy start --service
+
+# Check watchdog status
+bun run deploy watch
 ```
 
 ### Kết thúc
 
 ```bash
 # Destroy instance → NGỪNG TÍNH TIỀN
-bun run stop
+bun run deploy stop
 ```
 
 ### Commands tham khảo
 
 | Command | Mô tả |
 |---------|--------|
-| `bun run start` | Deploy instance mới |
-| `bun run stop` | Destroy instance |
-| `bun run status` | Xem instances đang chạy |
-| `bun run info` | Thông tin kết nối |
-| `bun run test:api` | Test API endpoint |
-| `bun run search` | Tìm GPU available |
-| `bun run ssh` | SSH vào instance |
-| `bun run logs` | Xem logs |
-| `bun run config-claude` | Tạo config Claude Code |
+| `bun run deploy start` | Deploy instance mới |
+| `bun run deploy stop` | Destroy instance |
+| `bun run deploy status` | Xem instances đang chạy |
+| `bun run deploy info` | Thông tin kết nối |
+| `bun run deploy test` | Test API endpoint |
+| `bun run deploy search` | Tìm GPU available |
+| `bun run deploy ssh` | SSH vào instance |
+| `bun run deploy logs` | Xem logs |
+| `bun run deploy dashboard` | TUI monitoring dashboard |
+| `bun run deploy config-claude` | Tạo config Claude Code |
+
+### CLI Flags
+
+| Flag | Mô tả | Default |
+|------|--------|---------|
+| `--cheap` | Tìm GPU rẻ nhất | ✅ |
+| `--fast` | Tìm GPU nhanh nhất | |
+| `--best` | GPU tốt nhất (quality) | |
+| `--gpu <name>` | Chọn GPU cụ thể (RTX4090, A100...) | |
+| `--spot` | Dùng spot/interruptible instance | |
+| `--hours <n>` | Auto-shutdown sau n giờ | |
+| `--budget <n>` | Auto-shutdown khi đạt $n | |
+| `--service` | Chạy watchdog background mode | |
+| `--dry-run` | Chỉ tìm GPU, không deploy | |
+| `--auto` | Skip confirmation, deploy ngay | |
 
 ---
 
