@@ -276,6 +276,27 @@ export async function getInstanceMetrics(id: number | string): Promise<InstanceM
   }
 }
 
+/** Quick status check without full metrics overhead */
+export async function getInstanceStatus(id: number | string): Promise<string> {
+  try {
+    const result = await $`vastai show instance ${id} --raw`.text().catch(() => "{}");
+    const data = JSON.parse(result);
+    return data.actual_status ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/** Check if instance is still alive (running or loading) */
+export function isInstanceAlive(status: string): boolean {
+  return status === "running" || status === "loading";
+}
+
+/** Status values that indicate spot interruption */
+export function isInstanceInterrupted(status: string): boolean {
+  return ["offline", "exited", "error", "interrupted", "preempted"].includes(status);
+}
+
 export interface InstanceMetrics {
   cpuUtil: number;
   ramUsed: number;

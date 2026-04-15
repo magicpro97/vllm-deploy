@@ -39,6 +39,9 @@ export interface CliArgs {
   // --service           Run watchdog as background service
   service: boolean;
 
+  // --auto-recover      Auto re-deploy if spot instance interrupted
+  autoRecover: boolean;
+
   // Extra flags passed through (e.g. --restore, --off)
   extra: string[];
 }
@@ -75,6 +78,7 @@ export function parseArgs(argv: string[]): CliArgs {
     hours: envNum("VLLM_HOURS"),
     budget: envNum("VLLM_BUDGET"),
     service: envBool("VLLM_SERVICE"),
+    autoRecover: envBool("VLLM_AUTO_RECOVER"),
     extra: [],
   };
 
@@ -156,6 +160,11 @@ export function parseArgs(argv: string[]): CliArgs {
       // Background service mode
       case "--service":
         args.service = true;
+        break;
+
+      // Auto-recover spot instance
+      case "--auto-recover":
+        args.autoRecover = true;
         break;
 
       // Pass through unknown flags

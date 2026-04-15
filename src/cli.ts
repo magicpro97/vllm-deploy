@@ -6,6 +6,7 @@ import {
   searchBestOffers, searchWithSavings,
   createInstance, showInstances, showInstancesFormatted,
   destroyInstance, getLogs, sshConnect,
+  getInstanceMetrics, isInstanceInterrupted,
   type VastInstance, type ScoredOffer,
 } from "./vastai";
 import { log, sleep, formatPrice, table } from "./ui";
@@ -124,6 +125,11 @@ function renderOfferTable(offers: ScoredOffer[]) {
 
 async function cmdStart() {
   const maxPrice = args.maxPrice ?? config.gpuMaxPrice;
+  // Smart spot: auto-enable for small budgets
+  if (args.budget && args.budget <= 5 && !args.spot) {
+    args.spot = true;
+    log.dim("  💡 Budget ≤ $5 → auto spot (tiết kiệm ~50%)");
+  }
   const type = args.spot ? "interruptible" : config.instanceType;
   const model = args.model ?? config.model;
   const vllmArgs = args.context
@@ -139,6 +145,7 @@ async function cmdStart() {
   if (args.region) log.dim(`  Region:    ${args.region}`);
   if (args.hours) log.dim(`  ⏰ Auto-stop: ${args.hours}h`);
   if (args.budget) log.dim(`  💵 Budget:    $${args.budget}`);
+  if (args.autoRecover) log.dim(`  🔄 Auto-recover: ON`);
   if (args.hours && args.budget) log.dim(`  → Điều kiện nào đến trước sẽ tự tắt`);
   console.log();
 
@@ -258,51 +265,174 @@ async function doCreate(offerId: number, model?: string, vllmArgs?: string, dphT
 async function startWatchdog(instanceId: string, dphTotal: number) {
   const hours = args.hours;
   const budget = args.budget;
-  const startTime = Date.now();
+  let currentInstanceId = instanceId;
+  let currentDph = dphTotal;
+  let cumulativeSpent = 0; // tracks total across recoveries
+  let cumulativeHours = 0;
+  let recoveryCount = 0;
+  const MAX_RECOVERIES = 10;
+  const RECOVERY_COOLDOWN = 5 * 60 * 1000; // 5 min between recoveries
 
-  // Calculate when each limit is hit
-  const maxMs = hours ? hours * 3600 * 1000 : Infinity;
-  const budgetMs = (budget && dphTotal > 0) ? (budget / dphTotal) * 3600 * 1000 : Infinity;
-  const limitMs = Math.min(maxMs, budgetMs);
-  const limitMinutes = Math.round(limitMs / 60000);
-  const limitSource = maxMs <= budgetMs ? "⏰ hours" : "💵 budget";
+  // Calculate limits
+  const maxHours = hours ?? Infinity;
+  const maxBudget = budget ?? Infinity;
 
   log.warn(`\n🔒 Auto-shutdown watchdog đang chạy:`);
   if (hours) log.dim(`   ⏰ Tắt sau ${hours}h`);
-  if (budget) log.dim(`   💵 Tắt khi chi $${budget} (~${((budget / dphTotal) * 60).toFixed(0)} phút @ ${formatPrice(dphTotal)}/hr)`);
-  log.dim(`   → ${limitSource} đến trước: ~${limitMinutes} phút`);
+  if (budget) log.dim(`   💵 Tắt khi chi $${budget}`);
+  if (args.autoRecover) log.dim(`   🔄 Auto-recover: ON (max ${MAX_RECOVERIES} lần)`);
   log.warn(`   ⚠️  Đóng terminal sẽ HỦY watchdog! Dùng 'bun run deploy stop' để tắt thủ công.`);
 
-  // Poll every 60 seconds
   const checkInterval = 60_000;
 
   while (true) {
     await sleep(checkInterval);
 
-    const elapsed = Date.now() - startTime;
-    const elapsedHours = elapsed / 3600000;
-    const spent = elapsedHours * dphTotal;
+    // Check instance status via Vast.ai API
+    const metrics = await getInstanceMetrics(currentInstanceId);
+    const status = metrics.status;
+
+    // Use actual uptime from Vast.ai (not local time)
+    const sessionHours = metrics.uptime / 3600;
+    const sessionSpent = sessionHours * currentDph;
+    const totalHours = cumulativeHours + sessionHours;
+    const totalSpent = cumulativeSpent + sessionSpent;
+
+    // Instance interrupted?
+    if (isInstanceInterrupted(status)) {
+      log.warn(`\n⚠️  Instance ${currentInstanceId} status: ${status}`);
+      cumulativeHours += sessionHours;
+      cumulativeSpent += sessionSpent;
+
+      if (args.autoRecover && recoveryCount < MAX_RECOVERIES) {
+        // Check if we still have budget/time left
+        if (totalHours >= maxHours) {
+          log.warn(`⏰ Đã đạt ${hours}h — không recover.`);
+          await autoDestroy(currentInstanceId, `${hours}h`, totalSpent);
+          return;
+        }
+        if (totalSpent >= maxBudget) {
+          log.warn(`💵 Đã chi $${totalSpent.toFixed(2)}/${budget} — không recover.`);
+          await autoDestroy(currentInstanceId, `$${totalSpent.toFixed(2)}`, totalSpent);
+          return;
+        }
+
+        recoveryCount++;
+        log.warn(`🔄 Auto-recover #${recoveryCount}/${MAX_RECOVERIES}...`);
+        log.dim(`   Đợi ${RECOVERY_COOLDOWN / 60000} phút trước khi tìm GPU mới...`);
+        await sleep(RECOVERY_COOLDOWN);
+
+        const newId = await recoverSpotInstance();
+        if (newId) {
+          currentInstanceId = newId;
+          const info = loadInstanceInfo();
+          currentDph = info?.dphTotal ?? currentDph;
+          log.ok(`✅ Recovered! Instance mới: ${newId}`);
+          continue;
+        } else {
+          log.err(`❌ Không tìm được GPU. Dừng watchdog.`);
+          return;
+        }
+      } else {
+        const reason = recoveryCount >= MAX_RECOVERIES
+          ? `Đã recover ${MAX_RECOVERIES} lần`
+          : "Auto-recover OFF";
+        log.err(`❌ Instance offline. ${reason}. Dừng watchdog.`);
+        removeInstanceInfo();
+        return;
+      }
+    }
 
     // Check time limit
-    if (hours && elapsedHours >= hours) {
-      log.warn(`\n⏰ ĐÃ ĐẠT ${hours}h — tự tắt instance...`);
-      await autoDestroy(instanceId, `${hours}h`, spent);
+    if (hours && totalHours >= hours) {
+      log.warn(`\n⏰ ĐÃ ĐẠT ${hours}h (actual uptime) — tự tắt...`);
+      await autoDestroy(currentInstanceId, `${hours}h`, totalSpent);
       return;
     }
 
     // Check budget limit
-    if (budget && spent >= budget) {
-      log.warn(`\n💵 ĐÃ CHI $${spent.toFixed(2)}/${budget} — tự tắt instance...`);
-      await autoDestroy(instanceId, `$${spent.toFixed(2)}`, spent);
+    if (budget && totalSpent >= budget) {
+      log.warn(`\n💵 ĐÃ CHI $${totalSpent.toFixed(2)}/${budget} — tự tắt...`);
+      await autoDestroy(currentInstanceId, `$${totalSpent.toFixed(2)}`, totalSpent);
       return;
     }
 
     // Progress report every 10 minutes
-    if (Math.round(elapsed / checkInterval) % 10 === 0) {
-      const remaining = Math.max(0, limitMs - elapsed);
-      log.dim(`   📊 ${elapsedHours.toFixed(1)}h | $${spent.toFixed(3)} spent | ~${Math.round(remaining / 60000)}m còn lại`);
+    if (Math.round(metrics.uptime / 60) % 10 === 0) {
+      const remaining = Math.max(0, (maxHours - totalHours) * 60);
+      const statusIcon = status === "running" ? "🟢" : "🟡";
+      log.dim(`   ${statusIcon} ${totalHours.toFixed(1)}h | $${totalSpent.toFixed(3)} spent | ~${Math.round(remaining)}m left${recoveryCount > 0 ? ` | 🔄${recoveryCount}` : ""}`);
     }
   }
+}
+
+/** Attempt to find and deploy a new spot instance after interruption */
+async function recoverSpotInstance(): Promise<string | null> {
+  log.warn("🔍 Tìm GPU mới cho spot recovery...");
+
+  const maxPrice = args.maxPrice ?? config.gpuMaxPrice;
+  const model = args.model ?? config.model;
+  const vllmArgs = args.context
+    ? config.vllmArgs.replace(/--max-model-len \d+/, `--max-model-len ${args.context}`)
+    : config.vllmArgs;
+
+  const offers = await searchBestOffers({
+    type: "interruptible",
+    minVram: config.gpuMinVram,
+    minDisk: config.diskSize,
+    maxPrice,
+    sortBy: args.strategy,
+    region: args.region,
+    gpuCandidates: args.gpu ? [args.gpu] : undefined,
+    limit: 5,
+  });
+
+  if (offers.length === 0) {
+    log.err("❌ Không tìm thấy GPU nào.");
+    return null;
+  }
+
+  const best = offers[0]!;
+  log.info(`🏆 Tìm thấy: ${best.gpu_name} @ ${formatPrice(best.dph_total)}/hr`);
+
+  const env: Record<string, string> = {};
+  env["VLLM_MODEL"] = model;
+  env["VLLM_ARGS"] = vllmArgs;
+  if (config.hfToken) env["HF_TOKEN"] = config.hfToken;
+
+  const newId = await createInstance(best.id, env, config.diskSize);
+  if (!newId) {
+    log.err("❌ Không tạo được instance mới.");
+    return null;
+  }
+
+  // Wait for ready
+  const inst = await waitForReady(newId, 300);
+  if (!inst) {
+    log.err("❌ Instance mới không ready trong 5 phút.");
+    return null;
+  }
+
+  const ports = inst.ports ?? {};
+  const apiPort = ports["8000/tcp"]?.[0]?.HostPort ?? "8000";
+  const sshPort = String(inst.ssh_port ?? ports["22/tcp"]?.[0]?.HostPort ?? "22");
+  const ip = inst.public_ipaddr ?? inst.ssh_host;
+
+  saveInstanceInfo({
+    instanceId: newId,
+    ip,
+    apiPort,
+    sshPort,
+    token: "",
+    model,
+    createdAt: new Date().toISOString(),
+    apiUrl: `http://${ip}:${apiPort}/v1`,
+    dphTotal: best.dph_total,
+    stopAfterHours: args.hours,
+    stopAfterBudget: args.budget,
+  });
+
+  return newId;
 }
 
 async function autoDestroy(instanceId: string, reason: string, totalSpent: number) {
@@ -327,6 +457,7 @@ function startServiceMode(_instanceId: string, _dphTotal: number) {
     "run", "src/cli.ts", "watch",
     ...(args.hours ? ["--hours", String(args.hours)] : []),
     ...(args.budget ? ["--budget", String(args.budget)] : []),
+    ...(args.autoRecover ? ["--auto-recover"] : []),
   ];
 
   const proc = Bun.spawn(["bun", ...bgArgs], {
@@ -623,6 +754,7 @@ function cmdHelp() {
     --gpu <name>    🎯 Lock GPU cụ thể             [VLLM_GPU]
     --max-price <n> 💵 Max giá/hr                   [VLLM_MAX_PRICE]
     --spot          💸 Dùng interruptible            [VLLM_SPOT=1]
+    --auto-recover  🔄 Tự thuê lại khi spot bị ngắt  [VLLM_AUTO_RECOVER=1]
     --model <name>  🔄 Đổi model                    [VLLM_MODEL]
     --context <n>   📏 Context length                [VLLM_CONTEXT]
     --region <geo>  🌍 Ưu tiên vùng                  [VLLM_REGION]
@@ -635,13 +767,14 @@ function cmdHelp() {
   \x1b[33mENV VARS:\x1b[0m  (ưu tiên: flag > env var > .env file)
     \x1b[90mVLLM_MODEL, VLLM_GPU, VLLM_MAX_PRICE, VLLM_SPOT,\x1b[0m
     \x1b[90mVLLM_HOURS, VLLM_BUDGET, VLLM_CONTEXT, VLLM_REGION,\x1b[0m
-    \x1b[90mVLLM_AUTO, VLLM_SERVICE, VLLM_STRATEGY\x1b[0m
+    \x1b[90mVLLM_AUTO, VLLM_SERVICE, VLLM_STRATEGY, VLLM_AUTO_RECOVER\x1b[0m
 
   \x1b[33mEXAMPLES:\x1b[0m
     \x1b[90mbun run start --hours 2 -y              # 2h rồi tự tắt\x1b[0m
     \x1b[90mbun run start --budget 1 --service -y   # Background, tắt khi chi $1\x1b[0m
     \x1b[90mbun run deploy dashboard                # TUI monitoring\x1b[0m
     \x1b[90mbun run start --cheap --spot -y          # Siêu tiết kiệm\x1b[0m
+    \x1b[90mbun run start --spot --auto-recover -y   # Spot + tự phục hồi\x1b[0m
     \x1b[90mVLLM_HOURS=2 VLLM_AUTO=1 bun run start  # Dùng env vars\x1b[0m
     \x1b[90mbun run deploy watch --hours 1 --service # Background watchdog\x1b[0m
     \x1b[90mbun run deploy stop                      # Tắt tất cả\x1b[0m

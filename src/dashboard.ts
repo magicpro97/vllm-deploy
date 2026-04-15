@@ -5,7 +5,7 @@
 import blessed from "blessed";
 import contrib from "blessed-contrib";
 import { loadInstanceInfo, loadConfig, isWatchdogRunning, type InstanceInfo } from "./config";
-import { getInstanceMetrics, destroyInstance, getLogs } from "./vastai";
+import { getInstanceMetrics, destroyInstance, getLogs, isInstanceInterrupted } from "./vastai";
 import { getRecentSessionStats, type ClaudeStats } from "./claude-stats";
 import type { CliArgs } from "./args";
 
@@ -18,6 +18,9 @@ interface DashboardState {
   // Accumulated
   totalSpent: number;
   elapsedHours: number;
+  // Instance health
+  instanceStatus: string;
+  isSpot: boolean;
   // vLLM API stats
   apiRequests: number;
   apiLatencyMs: number[];
@@ -39,6 +42,9 @@ export async function startDashboard(opts: {
     return; // unreachable but satisfies TS
   }
 
+  const cfg = loadConfig();
+  const isSpot = opts.args?.spot || cfg.instanceType === "interruptible";
+
   const state: DashboardState = {
     info,
     startTime: Date.now(),
@@ -47,6 +53,8 @@ export async function startDashboard(opts: {
     dphTotal: info.dphTotal ?? 0,
     totalSpent: 0,
     elapsedHours: 0,
+    instanceStatus: "loading",
+    isSpot,
     apiRequests: 0,
     apiLatencyMs: [],
     apiTokensGenerated: 0,
@@ -286,11 +294,41 @@ export async function startDashboard(opts: {
   const lastLogLines = new Set<string>();
 
   async function updateAll() {
-    // Update time/budget
-    state.elapsedHours = (Date.now() - state.startTime) / 3600000;
-    state.totalSpent = state.elapsedHours * state.dphTotal;
+    // Fetch instance metrics (includes actual uptime + status)
+    let metrics;
+    try {
+      metrics = await getInstanceMetrics(state.info.instanceId);
+      state.instanceStatus = metrics.status;
+
+      // Use actual uptime from Vast.ai instead of local time
+      if (metrics.uptime > 0) {
+        state.elapsedHours = metrics.uptime / 3600;
+        state.totalSpent = state.elapsedHours * state.dphTotal;
+      } else {
+        // Fallback to local time if API returns 0
+        state.elapsedHours = (Date.now() - state.startTime) / 3600000;
+        state.totalSpent = state.elapsedHours * state.dphTotal;
+      }
+
+      cpuGauge.setPercent(Math.min(100, Math.round(metrics.cpuUtil)));
+      const ramPct = metrics.ramTotal > 0 ? Math.round((metrics.ramUsed / metrics.ramTotal) * 100) : 0;
+      ramGauge.setPercent(Math.min(100, ramPct));
+      gpuGauge.setPercent(Math.min(100, Math.round(metrics.gpuUtil)));
+
+      networkBox.setContent(formatNetworkStatus(metrics));
+    } catch {
+      // Fallback to local time
+      state.elapsedHours = (Date.now() - state.startTime) / 3600000;
+      state.totalSpent = state.elapsedHours * state.dphTotal;
+    }
 
     timeBudgetBox.setContent(formatTimeBudget(state));
+
+    // Check if spot instance was interrupted
+    if (isInstanceInterrupted(state.instanceStatus)) {
+      appendLog(`{red-fg}⚠️  Instance ${state.instanceStatus}! Spot interrupted.{/red-fg}`);
+      headerBox.setContent(formatHeader(state, `{red-fg}INTERRUPTED (${state.instanceStatus}){/red-fg}`));
+    }
 
     // Check auto-shutdown conditions
     if (state.hoursLimit && state.elapsedHours >= state.hoursLimit) {
@@ -305,17 +343,6 @@ export async function startDashboard(opts: {
       await autoStop(state, screen);
       return;
     }
-
-    // Fetch instance metrics
-    try {
-      const metrics = await getInstanceMetrics(state.info.instanceId);
-      cpuGauge.setPercent(Math.min(100, Math.round(metrics.cpuUtil)));
-      const ramPct = metrics.ramTotal > 0 ? Math.round((metrics.ramUsed / metrics.ramTotal) * 100) : 0;
-      ramGauge.setPercent(Math.min(100, ramPct));
-      gpuGauge.setPercent(Math.min(100, Math.round(metrics.gpuUtil)));
-
-      networkBox.setContent(formatNetworkStatus(metrics));
-    } catch {}
 
     // Probe vLLM API for health + latency
     try {
@@ -499,11 +526,27 @@ function formatSettings(state: DashboardState, _info: InstanceInfo, cliArgs?: Cl
 
   // Instance type
   const instType = cliArgs?.spot ? "spot" : cfg.instanceType;
-  lines.push(` Type:     ${instType === "interruptible" || instType === "spot" ? "{yellow-fg}spot{/}" : "{green-fg}on-demand{/}"}`);
+  const isSpot = instType === "interruptible" || instType === "spot";
+  lines.push(` Type:     ${isSpot ? "{yellow-fg}spot{/}" : "{green-fg}on-demand{/}"}`);
 
-  // Price
+  // Instance status
+  const statusIcon = state.instanceStatus === "running" ? "{green-fg}●{/}"
+    : isInstanceInterrupted(state.instanceStatus) ? "{red-fg}●{/}"
+    : "{yellow-fg}●{/}";
+  lines.push(` Status:   ${statusIcon} ${state.instanceStatus}`);
+
+  // Price + spot savings
   lines.push(` $/hr:     {yellow-fg}$${state.dphTotal.toFixed(3)}{/}`);
+  if (isSpot && state.elapsedHours > 0) {
+    // Estimate on-demand as ~2x spot price
+    const estimatedSaved = state.dphTotal * state.elapsedHours;
+    lines.push(` Saved:    {green-fg}~$${estimatedSaved.toFixed(3)}{/} vs on-demand`);
+  }
 
+  // Auto-recover
+  if (cliArgs?.autoRecover) {
+    lines.push(` Recover:  {green-fg}ON{/}`);
+  }
   // Limits
   if (state.hoursLimit) {
     lines.push(` Max time: ${state.hoursLimit}h`);
