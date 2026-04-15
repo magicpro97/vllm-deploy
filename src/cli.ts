@@ -11,6 +11,9 @@ import {
 } from "./vastai";
 import { log, sleep, formatPrice, table } from "./ui";
 import { parseArgs, describeStrategy } from "./args";
+import {
+  runBenchmark, saveBenchmarkReport,
+} from "./benchmark";
 
 const config = loadConfig();
 const args = parseArgs(Bun.argv);
@@ -234,7 +237,6 @@ async function doCreate(offerId: number, model?: string, vllmArgs?: string, dphT
     log.info(`  API:  ${apiUrl}`);
     log.info(`  SSH:  ssh -p ${sshPort} root@${ip}`);
     log.warn("\n💡 Model đang load, có thể cần thêm 5-10 phút.");
-    log.warn("   Chạy 'bun run deploy test' để check API ready.");
 
     saveInstanceInfo({
       instanceId,
@@ -250,6 +252,9 @@ async function doCreate(offerId: number, model?: string, vllmArgs?: string, dphT
       stopAfterBudget: args.budget,
     });
 
+    // Auto-benchmark (health check + performance report)
+    await runPostDeployBenchmark(apiUrl, config.model);
+
     // Start auto-shutdown watchdog if limits are set
     if (args.hours || args.budget) {
       if (args.service) {
@@ -260,6 +265,60 @@ async function doCreate(offerId: number, model?: string, vllmArgs?: string, dphT
     } else if (args.service) {
       log.warn("⚠️  --service cần --hours và/hoặc --budget để biết khi nào tắt");
     }
+  }
+}
+
+// === Post-deploy benchmark (health check + performance report) ===
+
+async function runPostDeployBenchmark(apiUrl: string, model: string, maxWaitSec = 600) {
+  log.warn("\n📊 Chạy benchmark (health check + performance)...");
+  log.dim("   Đợi model load xong...\n");
+
+  // Wait for API to be ready (model loading)
+  const interval = 15_000;
+  let waited = 0;
+  let ready = false;
+
+  while (waited < maxWaitSec) {
+    try {
+      const res = await fetch(`${apiUrl}/models`, { signal: AbortSignal.timeout(5_000) });
+      if (res.ok) {
+        const data = (await res.json()) as { data?: { id: string }[] };
+        if (data.data && data.data.length > 0) {
+          ready = true;
+          break;
+        }
+      }
+    } catch {
+      // Model still loading
+    }
+    const pct = Math.round((waited / maxWaitSec) * 100);
+    log.dim(`  [${pct}%] Model loading... (${waited / 1000}s)`);
+    await sleep(interval);
+    waited += interval;
+  }
+
+  if (!ready) {
+    log.warn("  ⚠️ Model chưa load xong sau timeout. Chạy 'bun run deploy benchmark' sau.");
+    return;
+  }
+
+  log.ok("  ✅ API ready! Running benchmark...\n");
+
+  // Run quick benchmark (concurrency 1,2,4 only for speed)
+  const report = await runBenchmark(apiUrl, model, undefined, {
+    quiet: false,
+    concurrencyLevels: [1, 2, 4],
+  });
+
+  if (report) {
+    saveBenchmarkReport(report);
+    log.ok(`\n  💾 Benchmark saved → benchmark_report.json`);
+    log.ok(`  🚀 Baseline: ${report.baseline.tokPerSec} tok/s | Max sessions: ~${report.maxConcurrentSessions}`);
+    log.dim("  📊 Chi tiết: bun run deploy benchmark");
+    log.dim("  📊 Dashboard: bun run deploy dashboard");
+  } else {
+    log.warn("  ⚠️ Benchmark failed. Thử lại: bun run deploy benchmark");
   }
 }
 
@@ -626,49 +685,6 @@ async function cmdTest() {
 
 // === Benchmark: test throughput & concurrency ===
 
-interface BenchResult {
-  latencyMs: number;
-  tokens: number;
-  tokPerSec: number;
-  success: boolean;
-  error?: string;
-}
-
-async function singleRequest(
-  apiUrl: string, model: string, headers: Record<string, string>, prompt: string, maxTokens: number,
-): Promise<BenchResult> {
-  const start = Date.now();
-  try {
-    const res = await fetch(`${apiUrl}/chat/completions`, {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: maxTokens,
-        temperature: 0,
-      }),
-      signal: AbortSignal.timeout(120_000),
-    });
-    const data = (await res.json()) as {
-      usage?: { completion_tokens?: number };
-      error?: { message?: string };
-    };
-    const elapsed = Date.now() - start;
-    if (data.error) return { latencyMs: elapsed, tokens: 0, tokPerSec: 0, success: false, error: data.error.message };
-    const tokens = data.usage?.completion_tokens ?? 0;
-    return { latencyMs: elapsed, tokens, tokPerSec: tokens / (elapsed / 1000), success: true };
-  } catch (e: unknown) {
-    return { latencyMs: Date.now() - start, tokens: 0, tokPerSec: 0, success: false, error: e instanceof Error ? e.message : String(e) };
-  }
-}
-
-function percentile(arr: number[], p: number): number {
-  const sorted = [...arr].sort((a, b) => a - b);
-  const idx = Math.ceil((p / 100) * sorted.length) - 1;
-  return sorted[Math.max(0, idx)] ?? 0;
-}
-
 async function cmdBenchmark() {
   log.info("\n📊 Benchmark — đo throughput & concurrency\n");
 
@@ -677,88 +693,49 @@ async function cmdBenchmark() {
 
   const apiUrl = info.apiUrl;
   const model = info.model ?? config.model;
-  const headers: Record<string, string> = {};
-  if (info.token) headers["Authorization"] = `Bearer ${info.token}`;
 
-  // Phase 1: Single request baseline
-  log.warn("1️⃣  Single request baseline...");
-  const baseline = await singleRequest(apiUrl, model, headers, "Count from 1 to 20.", 100);
-  if (!baseline.success) {
-    log.err(`  ❌ API lỗi: ${baseline.error}`);
-    log.warn("  💡 Đảm bảo model đã load xong: bun run deploy test");
+  log.warn("1️⃣  Running benchmark...\n");
+  const report = await runBenchmark(apiUrl, model, info.token || undefined);
+
+  if (!report) {
+    log.err("  ❌ API không phản hồi. Đảm bảo model đã load: bun run deploy test");
     return;
   }
-  log.ok(`  ✅ Latency: ${baseline.latencyMs}ms | ${baseline.tokens} tokens | ${baseline.tokPerSec.toFixed(1)} tok/s`);
 
-  // Phase 2: Concurrent requests (1, 2, 4, 8, 16)
-  log.warn("\n2️⃣  Concurrent requests...\n");
+  // Save report
+  saveBenchmarkReport(report);
+  log.ok("  💾 Report saved → benchmark_report.json\n");
 
-  const concurrencyLevels = [1, 2, 4, 8, 16];
-  const prompt = "Write a short poem about programming in exactly 4 lines.";
-  const maxTokens = 100;
-
-  const rows: string[][] = [];
-
-  for (const c of concurrencyLevels) {
-    const promises: Promise<BenchResult>[] = [];
-    for (let i = 0; i < c; i++) {
-      promises.push(singleRequest(apiUrl, model, headers, prompt, maxTokens));
-    }
-    const results = await Promise.all(promises);
-    const successes = results.filter(r => r.success);
-    const failures = results.filter(r => !r.success);
-
-    if (successes.length === 0) {
-      log.warn(`  c=${c}: tất cả ${c} requests failed → dừng benchmark`);
-      break;
-    }
-
-    const latencies = successes.map(r => r.latencyMs);
-    const totalTokens = successes.reduce((sum, r) => sum + r.tokens, 0);
-    const elapsed = Math.max(...latencies);
-    const throughput = totalTokens / (elapsed / 1000);
-
-    rows.push([
-      String(c),
-      `${successes.length}/${c}`,
-      `${Math.round(percentile(latencies, 50))}ms`,
-      `${Math.round(percentile(latencies, 95))}ms`,
-      throughput.toFixed(1),
-      (successes.reduce((s, r) => s + r.tokPerSec, 0) / successes.length).toFixed(1),
-    ]);
-
-    log.dim(`  c=${c}: p50=${Math.round(percentile(latencies, 50))}ms, throughput=${throughput.toFixed(1)} tok/s${failures.length ? `, ${failures.length} failed` : ""}`);
-
-    // Stop if >50% failed
-    if (failures.length > c / 2) {
-      log.warn(`  ⚠️ >50% failed tại c=${c} → đây là giới hạn`);
-      break;
-    }
-  }
-
-  // Summary table
-  log.info("\n📊 Kết quả:");
+  // Display results
+  log.warn("2️⃣  Kết quả:\n");
+  log.ok(`  Baseline: ${report.baseline.latencyMs}ms | ${report.baseline.tokPerSec} tok/s`);
   console.log();
+
+  const rows = report.concurrency.map(r => [
+    String(r.concurrent),
+    r.successRate,
+    `${r.p50Ms}ms`,
+    `${r.p95Ms}ms`,
+    String(r.throughput),
+    String(r.avgTokPerSec),
+  ]);
+
   table(
     ["Concurrent", "Success", "P50 Latency", "P95 Latency", "Throughput (tok/s)", "Avg tok/s/req"],
     rows,
   );
 
-  // Phase 3: Capacity estimate
+  // Capacity estimate
   log.info("\n💡 Ước tính khả năng chịu tải:");
-  const baselineTokPerSec = baseline.tokPerSec;
-  log.dim(`  • Single request: ${baselineTokPerSec.toFixed(1)} tok/s`);
-  log.dim(`  • Claude Code (1 session): ~${Math.round(baselineTokPerSec)} tok/s — thoải mái ✅`);
+  log.dim(`  • Single request: ${report.baseline.tokPerSec} tok/s`);
+  log.dim(`  • Max concurrent sessions: ~${report.maxConcurrentSessions} (≥5 tok/s mỗi session)`);
 
-  const estimatedMaxConcurrent = Math.max(1, Math.floor(baselineTokPerSec / 5));
-  log.dim(`  • Ước tính max concurrent sessions: ~${estimatedMaxConcurrent} (≥5 tok/s mỗi session)`);
-
-  if (estimatedMaxConcurrent <= 2) {
+  if (report.maxConcurrentSessions <= 2) {
     log.warn("  → Chỉ nên dùng 1-2 Claude Code sessions");
-  } else if (estimatedMaxConcurrent <= 5) {
-    log.ok(`  → Thoải mái 2-3 sessions, max ~${estimatedMaxConcurrent}`);
+  } else if (report.maxConcurrentSessions <= 5) {
+    log.ok(`  → Thoải mái 2-3 sessions, max ~${report.maxConcurrentSessions}`);
   } else {
-    log.ok(`  → Có thể chạy ${Math.min(estimatedMaxConcurrent, 10)}+ sessions đồng thời`);
+    log.ok(`  → Có thể chạy ${Math.min(report.maxConcurrentSessions, 10)}+ sessions đồng thời`);
   }
 
   log.ok("\n✅ Benchmark complete!");

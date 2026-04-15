@@ -7,6 +7,7 @@ import contrib from "blessed-contrib";
 import { loadInstanceInfo, loadConfig, isWatchdogRunning, type InstanceInfo } from "./config";
 import { getInstanceMetrics, destroyInstance, getLogs, isInstanceInterrupted } from "./vastai";
 import { getRecentSessionStats, type ClaudeStats } from "./claude-stats";
+import { loadBenchmarkReport } from "./benchmark";
 import type { CliArgs } from "./args";
 
 interface DashboardState {
@@ -108,11 +109,11 @@ export async function startDashboard(opts: {
   });
 
   const toolBox = grid.set(2, 8, 3, 4, blessed.box, {
-    label: " 🔧 Tools / MCP ",
+    label: " 📊 Benchmark ",
     tags: true,
     border: { type: "line" },
     style: { border: { fg: "magenta" }, label: { fg: "magenta", bold: true } },
-    content: "",
+    content: formatBenchmark(),
   });
 
   // === Row 5-8: System metrics ===
@@ -400,7 +401,7 @@ export async function startDashboard(opts: {
 
     tokenBox.setContent(formatTokens(state));
     requestBox.setContent(formatRequests(state));
-    toolBox.setContent(formatTools(state));
+    toolBox.setContent(formatBenchmark());
     settingsBox.setContent(formatSettings(state, state.info, opts.args));
 
     screen.render();
@@ -480,16 +481,28 @@ function formatRequests(s: DashboardState): string {
   ].join("\n");
 }
 
-function formatTools(s: DashboardState): string {
-  const cs = s.claudeStats;
-  if (!cs) return " Waiting...";
+function formatBenchmark(): string {
+  const report = loadBenchmarkReport();
+  if (!report) return " No benchmark yet\n Run: bun run deploy benchmark";
 
-  return [
-    ` Tool calls:  {bold}${cs.toolUseCalls}{/bold}`,
-    ` Web search:  ${cs.webSearchCalls}`,
-    ` Web fetch:   ${cs.webFetchCalls}`,
-    ` MCP total:   ${cs.toolUseCalls + cs.webSearchCalls + cs.webFetchCalls}`,
-  ].join("\n");
+  const lines: string[] = [];
+  const age = Date.now() - new Date(report.timestamp).getTime();
+  const agoMin = Math.round(age / 60_000);
+  const agoStr = agoMin < 60 ? `${agoMin}m ago` : `${Math.round(agoMin / 60)}h ago`;
+
+  lines.push(` {bold}${report.baseline.tokPerSec} tok/s{/bold} baseline`);
+  lines.push(` Latency:  ${report.baseline.latencyMs}ms`);
+  lines.push(` Sessions: {bold}~${report.maxConcurrentSessions}{/bold} max concurrent`);
+
+  // Show best concurrency result
+  const last = report.concurrency[report.concurrency.length - 1];
+  if (last) {
+    lines.push(` Peak:     ${last.throughput} tok/s @c=${last.concurrent}`);
+  }
+
+  lines.push(` {gray-fg}${agoStr}{/gray-fg}`);
+
+  return lines.join("\n");
 }
 
 function formatNetworkStatus(m: { inetUp: number; inetDown: number; status: string; gpuTempC: number; gpuMemUsed: number; gpuMemTotal: number; diskUsed: number; diskTotal: number }): string {
