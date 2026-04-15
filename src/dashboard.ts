@@ -34,6 +34,7 @@ export async function startDashboard(opts: {
   if (!info) {
     console.error("❌ No instance info. Run: bun run deploy start");
     process.exit(1);
+    return; // unreachable but satisfies TS
   }
 
   const state: DashboardState = {
@@ -176,32 +177,31 @@ export async function startDashboard(opts: {
     process.exit(0);
   });
 
-  screen.key(["s"], async () => {
+  screen.key(["s"], () => {
     logBox.setContent(" 🛑 Stopping instance...");
     screen.render();
-    try {
-      await destroyInstance(Number(info.instanceId));
+    void destroyInstance(Number(info.instanceId)).then(() => {
       logBox.setContent(" ✅ Instance destroyed. Exiting...");
       screen.render();
       setTimeout(() => {
         screen.destroy();
         process.exit(0);
       }, 1500);
-    } catch (e) {
-      logBox.setContent(` ❌ Failed: ${e}`);
+    }).catch((e: unknown) => {
+      logBox.setContent(` ❌ Failed: ${String(e)}`);
       screen.render();
-    }
+    });
   });
 
   screen.key(["r"], () => {
     logBox.setContent(" 🔄 Refreshing...");
     screen.render();
-    updateAll();
+    void updateAll();
   });
 
   // Periodic updates
   const POLL_INTERVAL = 5_000;
-  let latencyHistory: number[] = [];
+  const latencyHistory: number[] = [];
 
   async function updateAll() {
     // Update time/budget
@@ -226,7 +226,7 @@ export async function startDashboard(opts: {
 
     // Fetch instance metrics
     try {
-      const metrics = await getInstanceMetrics(info.instanceId);
+      const metrics = await getInstanceMetrics(state.info.instanceId);
       cpuGauge.setPercent(Math.min(100, Math.round(metrics.cpuUtil)));
       const ramPct = metrics.ramTotal > 0 ? Math.round((metrics.ramUsed / metrics.ramTotal) * 100) : 0;
       ramGauge.setPercent(Math.min(100, ramPct));
@@ -239,7 +239,7 @@ export async function startDashboard(opts: {
     // Probe vLLM API for health + latency
     try {
       const start = performance.now();
-      const resp = await fetch(`${info.apiUrl}/models`, {
+      const resp = await fetch(`${state.info.apiUrl}/models`, {
         signal: AbortSignal.timeout(5000),
       });
       const latency = Math.round(performance.now() - start);
@@ -251,7 +251,7 @@ export async function startDashboard(opts: {
       latencyLine.setData(["Latency"], [latencyHistory]);
 
       if (resp.ok) {
-        const data = await resp.json() as any;
+        const data = await resp.json();
         const modelId = data?.data?.[0]?.id ?? "loading...";
         headerBox.setContent(formatHeader(state, modelId));
       }
@@ -283,7 +283,7 @@ export async function startDashboard(opts: {
   screen.render();
 
   // Start polling
-  setInterval(updateAll, POLL_INTERVAL);
+  setInterval(() => { void updateAll(); }, POLL_INTERVAL);
 }
 
 // === Formatters ===
@@ -341,7 +341,7 @@ function formatRequests(s: DashboardState): string {
     ? Math.round(s.apiLatencyMs.reduce((a, b) => a + b, 0) / s.apiLatencyMs.length)
     : 0;
   const p95 = s.apiLatencyMs.length > 0
-    ? Math.round(sorted(s.apiLatencyMs)[Math.floor(s.apiLatencyMs.length * 0.95)])
+    ? Math.round(sorted(s.apiLatencyMs)[Math.floor(s.apiLatencyMs.length * 0.95)] ?? 0)
     : 0;
 
   return [
@@ -371,7 +371,7 @@ function formatNetwork(m: { inetUp: number; inetDown: number }): string {
   ].join("\n");
 }
 
-function formatStatus(s: DashboardState, m: { status: string; gpuTempC: number; gpuMemUsed: number; gpuMemTotal: number; diskUsed: number; diskTotal: number }): string {
+function formatStatus(_s: DashboardState, m: { status: string; gpuTempC: number; gpuMemUsed: number; gpuMemTotal: number; diskUsed: number; diskTotal: number }): string {
   return [
     ` Status: {bold}${m.status}{/bold}`,
     ` GPU Temp: ${m.gpuTempC}°C`,

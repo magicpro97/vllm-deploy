@@ -22,7 +22,7 @@ export interface ClaudeStats {
 }
 
 const CLAUDE_DIR = joinPath(
-  process.env.USERPROFILE || process.env.HOME || "",
+  process.env["USERPROFILE"] ?? process.env["HOME"] ?? "",
   ".claude"
 );
 
@@ -145,6 +145,7 @@ export function getRecentSessionStats(maxAgeMinutes = 60): ClaudeStats | null {
     .sort((a, b) => b.mtime - a.mtime);
 
   const newest = sorted[0];
+  if (!newest) return null;
   const ageMinutes = (Date.now() - newest.mtime) / 60000;
   if (ageMinutes > maxAgeMinutes) return null;
 

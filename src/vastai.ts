@@ -30,7 +30,7 @@ export interface VastInstance {
   gpu_name: string;
   actual_status: string;
   public_ipaddr: string;
-  ports: Record<string, Array<{ HostPort: string }>>;
+  ports: Record<string, { HostPort: string }[]>;
   dph_total: number;
   ssh_port: number;
   ssh_host: string;
@@ -210,8 +210,8 @@ export async function createInstance(
   const result =
     await $`vastai create instance ${offerId} --image vllm/vllm-openai:latest --disk ${diskSize} ${envArgs}`.text();
 
-  const match = result.match(/(\d+)/);
-  return match ? match[1] : null;
+  const match = /(\d+)/.exec(result);
+  return match?.[1] ?? null;
 }
 
 export async function showInstances(): Promise<VastInstance[]> {

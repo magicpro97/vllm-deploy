@@ -16,10 +16,20 @@
     "config-claude": "bun run src/cli.ts config-claude",
     "dashboard": "bun run src/cli.ts dashboard",
     "dash": "bun run src/cli.ts dashboard",
-    "watch": "bun run src/cli.ts watch"
+    "watch": "bun run src/cli.ts watch",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@eslint/js": "^10.0.1",
+    "@types/blessed": "^0.1.27",
+    "@types/bun": "latest",
+    "@typescript-eslint/eslint-plugin": "^8.58.2",
+    "@typescript-eslint/parser": "^8.58.2",
+    "eslint": "^10.2.0",
+    "jiti": "^2.6.1",
+    "typescript-eslint": "^8.58.2"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

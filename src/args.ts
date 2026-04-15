@@ -81,6 +81,7 @@ export function parseArgs(argv: string[]): CliArgs {
   for (let i = 3; i < argv.length; i++) {
     const arg = argv[i];
     const next = argv[i + 1];
+    if (!arg) continue;
 
     switch (arg) {
       // Strategy presets

@@ -1,5 +1,3 @@
-import { $ } from "bun";
-
 export interface Config {
   vastaiApiKey: string;
   model: string;
@@ -46,9 +44,11 @@ export function loadConfig(): Config {
   try {
     const content = require("fs").readFileSync(envPath, "utf-8") as string;
     for (const line of content.split("\n")) {
-      const match = line.match(/^\s*([^#][^=]+)=(.*)$/);
+      const match = /^\s*([^#][^=]+)=(.*)$/.exec(line);
       if (!match) continue;
-      const [, key, val] = match;
+      const key = match[1];
+      const val = match[2];
+      if (!key || !val) continue;
       const k = key.trim();
       const v = val.trim();
 
@@ -96,7 +96,7 @@ export function loadConfig(): Config {
 const INFO_PATH = `${import.meta.dir}/../instance_info.json`;
 
 export function saveInstanceInfo(info: InstanceInfo) {
-  Bun.write(INFO_PATH, JSON.stringify(info, null, 2));
+  void Bun.write(INFO_PATH, JSON.stringify(info, null, 2));
 }
 
 export function loadInstanceInfo(): InstanceInfo | null {
@@ -118,7 +118,7 @@ export function removeInstanceInfo() {
 const PID_PATH = `${import.meta.dir}/../.watchdog.pid`;
 
 export function saveWatchdogPid(pid: number) {
-  Bun.write(PID_PATH, String(pid));
+  void Bun.write(PID_PATH, String(pid));
 }
 
 export function loadWatchdogPid(): number | null {

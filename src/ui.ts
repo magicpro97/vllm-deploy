@@ -20,10 +20,6 @@ export const log = {
 
 export function prompt(question: string): string {
   process.stdout.write(`${COLORS.cyan}${question}${COLORS.reset} `);
-  const buf = Buffer.alloc(256);
-  const fd = require("fs").openSync("/dev/stdin", "r");
-
-  // Use Bun's built-in prompt
   const answer = globalThis.prompt?.(question);
   return answer ?? "";
 }
@@ -49,7 +45,7 @@ export function table(
 
   const hr = widths.map((w) => "─".repeat(w + 2)).join("┼");
   const fmt = (row: string[]) =>
-    row.map((c, i) => ` ${(c ?? "").padEnd(widths[i])} `).join("│");
+    row.map((c, i) => ` ${(c ?? "").padEnd(widths[i] ?? 0)} `).join("│");
 
   console.log(`┌${hr.replace(/┼/g, "┬")}┐`);
   console.log(`│${fmt(headers)}│`);

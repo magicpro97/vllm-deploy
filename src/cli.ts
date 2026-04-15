@@ -3,13 +3,13 @@ import {
   saveWatchdogPid, loadWatchdogPid, removeWatchdogPid, isWatchdogRunning,
 } from "./config";
 import {
-  searchOffers, searchBestOffers, searchWithSavings,
+  searchBestOffers, searchWithSavings,
   createInstance, showInstances, showInstancesFormatted,
   destroyInstance, getLogs, sshConnect,
   type VastInstance, type ScoredOffer,
 } from "./vastai";
 import { log, sleep, formatPrice, table } from "./ui";
-import { parseArgs, describeStrategy, type CliArgs } from "./args";
+import { parseArgs, describeStrategy } from "./args";
 
 const config = loadConfig();
 const args = parseArgs(Bun.argv);
@@ -77,7 +77,9 @@ async function cmdSearch() {
       renderOfferTable(interruptible);
     }
     if (onDemand.length > 0 && interruptible.length > 0) {
-      const saving = ((1 - interruptible[0].dph_total / onDemand[0].dph_total) * 100).toFixed(0);
+      const intFirst = interruptible[0]!;
+      const odFirst = onDemand[0]!;
+      const saving = ((1 - intFirst.dph_total / odFirst.dph_total) * 100).toFixed(0);
       log.info(`\n💡 Spot rẻ hơn ~${saving}%`);
     }
     return;
@@ -162,7 +164,7 @@ async function cmdStart() {
   log.ok(`\n✅ ${offers.length} offers (${describeStrategy(args.strategy)}):`);
   renderOfferTable(offers);
 
-  const best = offers[0];
+  const best = offers[0]!;
   log.ok(`\n🏆 Best: ${best.gpu_name} @ ${formatPrice(best.dph_total)}/hr | ~${best.estTokPerSec} tok/s | $${best.costPer1kTok.toFixed(4)}/1Ktok`);
   log.dim(`   ${best.tier} | ${(best.reliability * 100).toFixed(0)}% reliable | ${Math.round(best.inet_up)}Mbps`);
 
@@ -171,14 +173,14 @@ async function cmdStart() {
     return;
   }
 
-  let selected = best;
+  let selected: ScoredOffer = best;
 
   if (!args.auto) {
     const confirm = globalThis.prompt?.("Deploy? (Y/n/số 1-8)") ?? "y";
     if (confirm.toLowerCase() === "n") process.exit(0);
     const idx = Number(confirm);
     if (idx >= 1 && idx <= offers.length) {
-      selected = offers[idx - 1];
+      selected = offers[idx - 1] ?? best;
       log.info(`  → Chọn #${idx}: ${selected.gpu_name} @ ${formatPrice(selected.dph_total)}/hr`);
     }
   } else {
@@ -199,7 +201,7 @@ async function doCreate(offerId: number, model?: string, vllmArgs?: string, dphT
     VLLM_ARGS: useArgs,
     AUTO_PARALLEL: "true",
   };
-  if (config.hfToken) env.HUGGING_FACE_HUB_TOKEN = config.hfToken;
+  if (config.hfToken) env["HUGGING_FACE_HUB_TOKEN"] = config.hfToken;
 
   const instanceId = await createInstance(offerId, env, config.diskSize);
 
@@ -241,7 +243,7 @@ async function doCreate(offerId: number, model?: string, vllmArgs?: string, dphT
     // Start auto-shutdown watchdog if limits are set
     if (args.hours || args.budget) {
       if (args.service) {
-        await startServiceMode(instanceId, dphTotal ?? 0);
+        startServiceMode(instanceId, dphTotal ?? 0);
       } else {
         await startWatchdog(instanceId, dphTotal ?? 0);
       }
@@ -319,7 +321,7 @@ async function autoDestroy(instanceId: string, reason: string, totalSpent: numbe
 }
 
 /** Start watchdog as a detached background process */
-async function startServiceMode(instanceId: string, dphTotal: number) {
+function startServiceMode(_instanceId: string, _dphTotal: number) {
   // Build args for background process
   const bgArgs = [
     "run", "src/cli.ts", "watch",
@@ -373,7 +375,7 @@ async function startServiceMode(instanceId: string, dphTotal: number) {
   );
 
   if (instances.length === 1) {
-    const id = instances[0].id;
+    const id = instances[0]!.id;
     const confirm = globalThis.prompt?.(`Destroy instance ${id}? (Y/n)`) ?? "y";
     if (confirm.toLowerCase() !== "n") {
       const result = await destroyInstance(id);
@@ -438,7 +440,7 @@ async function cmdTest() {
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
     const res = await fetch(`${apiUrl}/models`, { headers, signal: AbortSignal.timeout(10_000) });
-    const data = (await res.json()) as any;
+    const data = (await res.json());
     const models = data.data?.map((m: any) => m.id).join(", ") ?? "?";
     log.ok(`  ✅ Models: ${models}`);
   } catch (e: any) {
@@ -467,7 +469,7 @@ async function cmdTest() {
       signal: AbortSignal.timeout(30_000),
     });
 
-    const data = (await res.json()) as any;
+    const data = (await res.json());
     const reply = data.choices?.[0]?.message?.content ?? "?";
     log.ok(`  ✅ Response: ${reply}`);
 
@@ -495,7 +497,7 @@ async function cmdSsh() {
 }
 
 async function cmdConfigClaude() {
-  const home = process.env.USERPROFILE || process.env.HOME || "";
+  const home = process.env["USERPROFILE"] ?? process.env["HOME"] ?? "";
   const settingsPath = `${home}/.claude/settings.json`;
   const backupPath = `${home}/.claude/settings.json.vllm-backup`;
 
@@ -518,10 +520,10 @@ async function cmdConfigClaude() {
   }
 
   // Read current settings
-  let settings: Record<string, any> = {};
+  let settings: Record<string, unknown> = {};
   try {
     const raw = await Bun.file(settingsPath).text();
-    settings = JSON.parse(raw);
+    settings = JSON.parse(raw) as Record<string, unknown>;
   } catch {
     log.warn("⚠️  Không tìm thấy settings.json, tạo mới");
   }
@@ -534,11 +536,12 @@ async function cmdConfigClaude() {
   }
 
   // Update env vars
-  if (!settings.env) settings.env = {};
-  const apiBase = info.apiUrl.replace(/\/v1\/?$/, ""); // Claude cần base URL không có /v1
+  if (!settings["env"]) settings["env"] = {};
+  const apiBase = info.apiUrl.replace(/\/v1\/?$/, "");
+  const envObj = settings["env"] as Record<string, string>;
 
-  settings.env.ANTHROPIC_BASE_URL = apiBase;
-  settings.env.ANTHROPIC_API_KEY = info.token || "not-needed";
+  envObj["ANTHROPIC_BASE_URL"] = apiBase;
+  envObj["ANTHROPIC_API_KEY"] = info.token || "not-needed";
 
   // Ghi file
   await Bun.write(settingsPath, JSON.stringify(settings, null, 2));
@@ -565,10 +568,11 @@ async function restoreClaudeSettings(settingsPath: string, backupPath: string) {
 async function disableVllmInClaude(settingsPath: string) {
   try {
     const raw = await Bun.file(settingsPath).text();
-    const settings = JSON.parse(raw);
-    if (settings.env) {
-      delete settings.env.ANTHROPIC_BASE_URL;
-      delete settings.env.ANTHROPIC_API_KEY;
+    const settings = JSON.parse(raw) as Record<string, unknown>;
+    const envObj = settings["env"] as Record<string, unknown> | undefined;
+    if (envObj) {
+      delete envObj["ANTHROPIC_BASE_URL"];
+      delete envObj["ANTHROPIC_API_KEY"];
     }
     await Bun.write(settingsPath, JSON.stringify(settings, null, 2));
     log.ok("✅ Đã tắt vLLM proxy — Claude Code sẽ dùng API gốc.");
@@ -590,13 +594,13 @@ async function cmdLogs() {
 
 function cmdHelp() {
   console.log(`
-  ${"\x1b[1m\x1b[36m"}vLLM Deploy — Quản lý vLLM trên Vast.ai${"\x1b[0m"}
+  \x1b[1m\x1b[36mvLLM Deploy — Quản lý vLLM trên Vast.ai\x1b[0m
   ════════════════════════════════════════
 
-  ${"\x1b[33m"}USAGE:${"\x1b[0m"}
+  \x1b[33mUSAGE:\x1b[0m
     bun run deploy <action> [flags]
 
-  ${"\x1b[33m"}ACTIONS:${"\x1b[0m"}
+  \x1b[33mACTIONS:\x1b[0m
     start           Tìm GPU rẻ nhất → deploy instance
     stop            Destroy instance + kill watchdog
     status          Xem instances đang chạy
@@ -612,7 +616,7 @@ function cmdHelp() {
     watch           Gắn watchdog auto-shutdown vào instance
     help            Hiện help này
 
-  ${"\x1b[33m"}FLAGS:${"\x1b[0m"}
+  \x1b[33mFLAGS:\x1b[0m
     --cheap         💰 Giá thuê/hr thấp nhất
     --fast          ⚡ Tok/s cao nhất
     --best          ⭐ $/1K tokens thấp nhất (default)
@@ -628,21 +632,21 @@ function cmdHelp() {
     --budget <n>    💵 Tự tắt khi chi $N             [VLLM_BUDGET]
     --service       🔧 Chạy watchdog nền (background) [VLLM_SERVICE=1]
 
-  ${"\x1b[33m"}ENV VARS:${"\x1b[0m"}  (ưu tiên: flag > env var > .env file)
-    ${"\x1b[90m"}VLLM_MODEL, VLLM_GPU, VLLM_MAX_PRICE, VLLM_SPOT,${"\x1b[0m"}
-    ${"\x1b[90m"}VLLM_HOURS, VLLM_BUDGET, VLLM_CONTEXT, VLLM_REGION,${"\x1b[0m"}
-    ${"\x1b[90m"}VLLM_AUTO, VLLM_SERVICE, VLLM_STRATEGY${"\x1b[0m"}
+  \x1b[33mENV VARS:\x1b[0m  (ưu tiên: flag > env var > .env file)
+    \x1b[90mVLLM_MODEL, VLLM_GPU, VLLM_MAX_PRICE, VLLM_SPOT,\x1b[0m
+    \x1b[90mVLLM_HOURS, VLLM_BUDGET, VLLM_CONTEXT, VLLM_REGION,\x1b[0m
+    \x1b[90mVLLM_AUTO, VLLM_SERVICE, VLLM_STRATEGY\x1b[0m
 
-  ${"\x1b[33m"}EXAMPLES:${"\x1b[0m"}
-    ${"\x1b[90m"}bun run start --hours 2 -y              # 2h rồi tự tắt${"\x1b[0m"}
-    ${"\x1b[90m"}bun run start --budget 1 --service -y   # Background, tắt khi chi $1${"\x1b[0m"}
-    ${"\x1b[90m"}bun run deploy dashboard                # TUI monitoring${"\x1b[0m"}
-    ${"\x1b[90m"}bun run start --cheap --spot -y          # Siêu tiết kiệm${"\x1b[0m"}
-    ${"\x1b[90m"}VLLM_HOURS=2 VLLM_AUTO=1 bun run start  # Dùng env vars${"\x1b[0m"}
-    ${"\x1b[90m"}bun run deploy watch --hours 1 --service # Background watchdog${"\x1b[0m"}
-    ${"\x1b[90m"}bun run deploy stop                      # Tắt tất cả${"\x1b[0m"}
+  \x1b[33mEXAMPLES:\x1b[0m
+    \x1b[90mbun run start --hours 2 -y              # 2h rồi tự tắt\x1b[0m
+    \x1b[90mbun run start --budget 1 --service -y   # Background, tắt khi chi $1\x1b[0m
+    \x1b[90mbun run deploy dashboard                # TUI monitoring\x1b[0m
+    \x1b[90mbun run start --cheap --spot -y          # Siêu tiết kiệm\x1b[0m
+    \x1b[90mVLLM_HOURS=2 VLLM_AUTO=1 bun run start  # Dùng env vars\x1b[0m
+    \x1b[90mbun run deploy watch --hours 1 --service # Background watchdog\x1b[0m
+    \x1b[90mbun run deploy stop                      # Tắt tất cả\x1b[0m
 
-  ${"\x1b[32m"}CHI PHÍ: ~$0.20-0.50/hr | ~$11-35/tháng (2h/ngày)${"\x1b[0m"}
+  \x1b[32mCHI PHÍ: ~$0.20-0.50/hr | ~$11-35/tháng (2h/ngày)\x1b[0m
 `);
 }
 
@@ -667,7 +671,7 @@ async function cmdWatch() {
   }
 
   if (args.service) {
-    await startServiceMode(info.instanceId, dph);
+    startServiceMode(info.instanceId, dph);
   } else {
     log.info(`\n👀 Watch instance ${info.instanceId} @ ${formatPrice(dph)}/hr`);
     await startWatchdog(info.instanceId, dph);
