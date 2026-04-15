@@ -48,14 +48,15 @@ function findSessionFiles(): string[] {
 }
 
 /** Parse a single JSONL file for stats */
-function parseSessionFile(filePath: string): Partial<ClaudeStats> {
-  const stats: Partial<ClaudeStats> = {
+function parseSessionFile(filePath: string) {
+  const stats = {
     totalInputTokens: 0,
     totalOutputTokens: 0,
     requestCount: 0,
     toolUseCalls: 0,
     webSearchCalls: 0,
     webFetchCalls: 0,
+    lastActivity: undefined as string | undefined,
   };
 
   try {
@@ -67,19 +68,19 @@ function parseSessionFile(filePath: string): Partial<ClaudeStats> {
 
         if (obj.type === "assistant" && obj.message?.usage) {
           const u = obj.message.usage;
-          stats.totalInputTokens! += u.input_tokens || 0;
-          stats.totalOutputTokens! += u.output_tokens || 0;
-          stats.requestCount! += 1;
+          stats.totalInputTokens += u.input_tokens || 0;
+          stats.totalOutputTokens += u.output_tokens || 0;
+          stats.requestCount += 1;
 
           if (u.server_tool_use) {
-            stats.webSearchCalls! += u.server_tool_use.web_search_requests || 0;
-            stats.webFetchCalls! += u.server_tool_use.web_fetch_requests || 0;
+            stats.webSearchCalls += u.server_tool_use.web_search_requests || 0;
+            stats.webFetchCalls += u.server_tool_use.web_fetch_requests || 0;
           }
 
           // Count tool_use blocks in content
           if (Array.isArray(obj.message.content)) {
             for (const block of obj.message.content) {
-              if (block.type === "tool_use") stats.toolUseCalls! += 1;
+              if (block.type === "tool_use") stats.toolUseCalls += 1;
             }
           }
 
@@ -159,8 +160,8 @@ export function getRecentSessionStats(maxAgeMinutes = 60): ClaudeStats | null {
     webSearchCalls: s.webSearchCalls || 0,
     webFetchCalls: s.webFetchCalls || 0,
     avgOutputTokens:
-      s.requestCount! > 0
-        ? Math.round(s.totalOutputTokens! / s.requestCount!)
+      s.requestCount > 0
+        ? Math.round(s.totalOutputTokens / s.requestCount)
         : 0,
     sessions: 1,
     lastActivity: s.lastActivity,

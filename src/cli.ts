@@ -78,10 +78,12 @@ async function cmdSearch() {
       renderOfferTable(interruptible);
     }
     if (onDemand.length > 0 && interruptible.length > 0) {
-      const intFirst = interruptible[0]!;
-      const odFirst = onDemand[0]!;
-      const saving = ((1 - intFirst.dph_total / odFirst.dph_total) * 100).toFixed(0);
-      log.info(`\n💡 Spot rẻ hơn ~${saving}%`);
+      const intFirst = interruptible[0];
+      const odFirst = onDemand[0];
+      if (intFirst && odFirst) {
+        const saving = ((1 - intFirst.dph_total / odFirst.dph_total) * 100).toFixed(0);
+        log.info(`\n💡 Spot rẻ hơn ~${saving}%`);
+      }
     }
     return;
   }
@@ -171,7 +173,8 @@ async function cmdStart() {
   log.ok(`\n✅ ${offers.length} offers (${describeStrategy(args.strategy)}):`);
   renderOfferTable(offers);
 
-  const best = offers[0]!;
+  const best = offers[0];
+  if (!best) return;
   log.ok(`\n🏆 Best: ${best.gpu_name} @ ${formatPrice(best.dph_total)}/hr | ~${best.estTokPerSec} tok/s | $${best.costPer1kTok.toFixed(4)}/1Ktok`);
   log.dim(`   ${best.tier} | ${(best.reliability * 100).toFixed(0)}% reliable | ${Math.round(best.inet_up)}Mbps`);
 
@@ -392,7 +395,8 @@ async function recoverSpotInstance(): Promise<string | null> {
     return null;
   }
 
-  const best = offers[0]!;
+  const best = offers[0];
+  if (!best) return null;
   log.info(`🏆 Tìm thấy: ${best.gpu_name} @ ${formatPrice(best.dph_total)}/hr`);
 
   const env: Record<string, string> = {};
@@ -506,7 +510,9 @@ function startServiceMode(_instanceId: string, _dphTotal: number) {
   );
 
   if (instances.length === 1) {
-    const id = instances[0]!.id;
+    const inst = instances[0];
+    if (!inst) return;
+    const id = inst.id;
     const confirm = globalThis.prompt?.(`Destroy instance ${id}? (Y/n)`) ?? "y";
     if (confirm.toLowerCase() !== "n") {
       const result = await destroyInstance(id);
@@ -571,11 +577,11 @@ async function cmdTest() {
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
     const res = await fetch(`${apiUrl}/models`, { headers, signal: AbortSignal.timeout(10_000) });
-    const data = (await res.json());
-    const models = data.data?.map((m: any) => m.id).join(", ") ?? "?";
+    const data = (await res.json()) as { data?: { id: string }[] };
+    const models = data.data?.map((m) => m.id).join(", ") ?? "?";
     log.ok(`  ✅ Models: ${models}`);
-  } catch (e: any) {
-    log.err(`  ❌ Lỗi: ${e.message}`);
+  } catch (e: unknown) {
+    log.err(`  ❌ Lỗi: ${e instanceof Error ? e.message : String(e)}`);
     log.warn("  💡 Model có thể chưa load xong. Thử lại sau 2-3 phút.");
     return;
   }
@@ -600,7 +606,10 @@ async function cmdTest() {
       signal: AbortSignal.timeout(30_000),
     });
 
-    const data = (await res.json());
+    const data = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+      usage?: { prompt_tokens: number; completion_tokens: number };
+    };
     const reply = data.choices?.[0]?.message?.content ?? "?";
     log.ok(`  ✅ Response: ${reply}`);
 
@@ -608,8 +617,8 @@ async function cmdTest() {
     if (usage) {
       log.dim(`  📊 Tokens: prompt=${usage.prompt_tokens}, completion=${usage.completion_tokens}`);
     }
-  } catch (e: any) {
-    log.err(`  ❌ Lỗi: ${e.message}`);
+  } catch (e: unknown) {
+    log.err(`  ❌ Lỗi: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   log.ok("\n✅ API test complete!");
