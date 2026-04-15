@@ -180,6 +180,9 @@ CUDA error: no kernel image is available for execution on the device
 
 ### Kiểm tra
 ```bash
+# Chạy benchmark để đo throughput chính xác
+bun run deploy benchmark
+
 # Dùng dashboard để monitor real-time
 bun run deploy dashboard
 
@@ -236,4 +239,13 @@ Dashboard lấy uptime thực tế từ Vast.ai API (`metrics.uptime`), không p
 # Check API response trực tiếp
 vastai show instances --raw
 # Xem field `duration` — uptime tính bằng giây
+```
+
+### Benchmark panel hiện "No benchmark yet"
+
+Benchmark tự chạy sau deploy. Nếu panel trống:
+```bash
+# Chạy benchmark thủ công
+bun run deploy benchmark
+# Kết quả lưu vào benchmark_report.json → dashboard tự hiện
 ```

@@ -34,7 +34,7 @@ block-beta
     D["📡 Requests\nTotal, Avg latency"]
   end
   block:tools:4
-    E["🔧 Tools / MCP\nClaude Code calls"]
+    E["📊 Benchmark\nBaseline tok/s, Max sessions"]
   end
 
   block:cpu:3
@@ -87,9 +87,13 @@ block-beta
 - Tổng API requests
 - Latency trung bình (ms)
 
-### 🔧 Tools / MCP
-- Claude Code tool calls
-- MCP server stats
+### 📊 Benchmark
+- Baseline throughput (tok/s)
+- Latency (ms)
+- Max concurrent sessions ước tính
+- Peak throughput tại concurrency cao nhất
+- Thời gian chạy benchmark gần nhất
+- Dữ liệu từ `benchmark_report.json` (tự tạo sau deploy hoặc chạy `bun run deploy benchmark`)
 
 ### CPU / RAM / GPU Gauges
 - Real-time utilization %
@@ -139,6 +143,20 @@ bun run deploy dashboard --budget 1.50
 
 # Dashboard + budget + hours
 bun run deploy dashboard --hours 4 --budget 2.00
+```
+
+## Auto-benchmark sau Deploy
+
+Khi chạy `bun run deploy start`, sau khi instance ready:
+
+1. CLI tự đợi model load xong (poll `/v1/models`, tối đa 10 phút)
+2. Chạy quick benchmark (c=1, 2, 4)
+3. Lưu kết quả vào `benchmark_report.json`
+4. Dashboard tự hiện benchmark data
+
+Nếu muốn chạy benchmark đầy đủ (c=1,2,4,8,16):
+```bash
+bun run deploy benchmark
 ```
 
 ## Spot Instance trên Dashboard

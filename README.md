@@ -8,6 +8,7 @@
 - 🔍 **Smart GPU search** — tự tìm GPU rẻ nhất trên marketplace (`--cheap`, `--fast`, `--best`)
 - 🚀 **1-command deploy** — start, stop, status, SSH, logs
 - 📊 **TUI Dashboard** — real-time monitoring CPU/GPU/RAM/Network/Tokens/Latency (virtual scroll logs)
+- 📈 **Auto-benchmark** — tự đo throughput & concurrency sau deploy, hiện trên dashboard
 - 💰 **Cost control** — auto-shutdown với `--hours` và `--budget`
 - 🔄 **Service mode** — watchdog tự restart khi instance die
 - 🎯 **Spot instance** — tiết kiệm ~50-65% với `--spot`, auto-recover khi bị gián đoạn
@@ -40,7 +41,7 @@ vastai set api-key YOUR_API_KEY
 ### 2. Deploy
 
 ```bash
-# Tìm GPU rẻ nhất + deploy
+# Tìm GPU rẻ nhất + deploy (tự chạy benchmark sau khi ready)
 bun run deploy start
 
 # Hoặc với options

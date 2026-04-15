@@ -40,7 +40,7 @@ bun run deploy search    # Test tìm GPU
 ### Bắt đầu làm việc
 
 ```bash
-# 1. Deploy (tự tìm GPU rẻ nhất)
+# 1. Deploy (tự tìm GPU rẻ nhất + auto-benchmark)
 bun run deploy start
 
 # Hoặc với options
@@ -52,20 +52,21 @@ bun run deploy start --spot --auto-recover  # Spot + tự phục hồi
 bun run deploy start --hours 2         # Tự tắt sau 2h
 bun run deploy start --budget 1.00     # Tự tắt khi đạt $1 (auto spot nếu ≤$5)
 
-# 2. Đợi ~5-15 phút (boot + load model)
+# 2. Đợi deploy + auto-benchmark (~5-15 phút)
+#    CLI tự chạy benchmark khi model ready
 
-# 3. Check API ready
-bun run deploy test
-
-# 4. Xem dashboard real-time
+# 3. Xem dashboard real-time
 bun run deploy dashboard
 ```
 
 ### Monitor
 
 ```bash
-# TUI Dashboard — GPU/CPU/RAM/Network/Tokens/Latency
+# TUI Dashboard — GPU/CPU/RAM/Network/Tokens/Latency/Benchmark
 bun run deploy dashboard
+
+# Benchmark throughput & concurrency (đầy đủ)
+bun run deploy benchmark
 
 # Quick status check
 bun run deploy status
