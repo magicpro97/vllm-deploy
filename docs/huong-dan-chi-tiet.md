@@ -209,15 +209,26 @@ Ngoài CLI, bạn có thể dùng web UI tại https://cloud.vast.ai:
 
 ## Đổi model
 
-Sửa `.env`:
+### Cách 1: CLI flag (ưu tiên)
 ```bash
-VLLM_MODEL=google/gemma-4-12b-it
-VLLM_ARGS=--max-model-len 16384 --gpu-memory-utilization 0.9
+bun run deploy start --model google/gemma-4-12b-it
+bun run deploy start --model Qwen/Qwen3-32B
+bun run deploy start --model meta-llama/Llama-3.1-8B-Instruct
+bun run deploy start --model deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+
+# Kết hợp context length
+bun run deploy start --model google/gemma-4-12b-it --context 16384
 ```
 
-Hoặc dùng bất kỳ model nào từ HuggingFace:
+### Cách 2: Env var
 ```bash
-VLLM_MODEL=meta-llama/Llama-3.1-8B-Instruct
-VLLM_MODEL=Qwen/Qwen3-32B
-VLLM_MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+VLLM_MODEL=Qwen/Qwen3-32B bun run deploy start
 ```
+
+### Cách 3: File .env
+```bash
+VLLM_MODEL=google/gemma-4-12b-it
+VLLM_ARGS=--max-model-len 16384 --gpu-memory-utilization 0.95 --enable-prefix-caching
+```
+
+> 💡 Ưu tiên: `--model` flag > env var `VLLM_MODEL` > `.env` file > default

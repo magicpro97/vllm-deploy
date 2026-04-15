@@ -45,6 +45,7 @@ bun run deploy start
 bun run deploy start --cheap          # GPU rẻ nhất
 bun run deploy start --fast           # GPU nhanh nhất
 bun run deploy start --gpu RTX4090    # Chọn GPU cụ thể
+bun run deploy start --model Qwen/Qwen3-32B  # Đổi model
 bun run deploy start --spot           # Spot instance (rẻ hơn ~50%)
 bun run deploy start --hours 2        # Tự tắt sau 2h
 bun run deploy start --budget 1.00    # Tự tắt khi đạt $1
@@ -106,6 +107,26 @@ bun run deploy start --service
 
 # Xem trạng thái watchdog
 bun run deploy watch
+```
+
+## Đổi Model
+
+Mặc định dùng `charaf/gemma4-31b-claude-opus-abliterated`. Đổi bằng `--model`:
+
+```bash
+# Dùng model khác từ HuggingFace
+bun run deploy start --model Qwen/Qwen3-32B
+bun run deploy start --model google/gemma-4-12b-it
+bun run deploy start --model meta-llama/Llama-3.1-8B-Instruct
+bun run deploy start --model deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+
+# Kết hợp với context length
+bun run deploy start --model google/gemma-4-12b-it --context 16384
+```
+
+Hoặc set trong `.env`:
+```bash
+VLLM_MODEL=Qwen/Qwen3-32B
 ```
 
 ## Chi phí ước tính
