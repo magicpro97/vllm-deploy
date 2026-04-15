@@ -16,22 +16,50 @@ bun run deploy dash
 
 Dashboard sử dụng grid 12x12 với các panel:
 
-```
-┌─────────────────────────┬─────────────────────────┐
-│  🚀 vLLM Instance       │  ⏰ Time & Budget       │
-│  ID, IP, API URL, Model │  Elapsed, Spent, Limits │
-├────────────┬────────────┼────────────┤            │
-│  🔤 Tokens │  📡 Requests│  🔧 Tools  │            │
-│  Generated │  Total, Avg│  MCP calls │            │
-├───────┬────┴──┬────────┬┴────────────┤            │
-│ CPU % │ RAM   │ GPU %  │ 🌐 Network  │            │
-│ gauge │ gauge │ gauge  │ Upload/Down  │            │
-├───────┴───────┴────────┴─┬───────────┤            │
-│  ⚡ Latency (sparkline)   │ ⚙ Settings│            │
-│  Response times history  │ Config    │            │
-├──────────────────────────┴───────────┤            │
-│  [q] Quit  [s] Stop  [r] Refresh    │            │
-└──────────────────────────────────────┘
+```mermaid
+block-beta
+  columns 12
+
+  block:header:6
+    A["🚀 vLLM Instance\nID, IP, API URL, Model"]
+  end
+  block:time:6
+    B["⏰ Time & Budget\nElapsed, Spent, Limits"]
+  end
+
+  block:tokens:4
+    C["🔤 Tokens\nGenerated, tok/s"]
+  end
+  block:requests:4
+    D["📡 Requests\nTotal, Avg latency"]
+  end
+  block:tools:4
+    E["🔧 Tools / MCP\nClaude Code calls"]
+  end
+
+  block:cpu:3
+    F["CPU %"]
+  end
+  block:ram:3
+    G["RAM"]
+  end
+  block:gpu:3
+    H["GPU %"]
+  end
+  block:net:3
+    I["🌐 Network\nUp/Down"]
+  end
+
+  block:latency:8
+    J["⚡ Latency sparkline\nResponse times history"]
+  end
+  block:settings:4
+    K["⚙ Settings\nModel, Strategy, Config"]
+  end
+
+  block:hotkeys:12
+    L["[q] Quit  [s] Stop instance  [r] Refresh"]
+  end
 ```
 
 ## Panels
