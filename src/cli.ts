@@ -1,4 +1,7 @@
-import { loadConfig, saveInstanceInfo, loadInstanceInfo, removeInstanceInfo } from "./config";
+import {
+  loadConfig, saveInstanceInfo, loadInstanceInfo, removeInstanceInfo,
+  saveWatchdogPid, loadWatchdogPid, removeWatchdogPid, isWatchdogRunning,
+} from "./config";
 import {
   searchOffers, searchBestOffers, searchWithSavings,
   createInstance, showInstances, showInstancesFormatted,
@@ -237,7 +240,13 @@ async function doCreate(offerId: number, model?: string, vllmArgs?: string, dphT
 
     // Start auto-shutdown watchdog if limits are set
     if (args.hours || args.budget) {
-      await startWatchdog(instanceId, dphTotal ?? 0);
+      if (args.service) {
+        await startServiceMode(instanceId, dphTotal ?? 0);
+      } else {
+        await startWatchdog(instanceId, dphTotal ?? 0);
+      }
+    } else if (args.service) {
+      log.warn("⚠️  --service cần --hours và/hoặc --budget để biết khi nào tắt");
     }
   }
 }
@@ -298,6 +307,7 @@ async function autoDestroy(instanceId: string, reason: string, totalSpent: numbe
   try {
     await destroyInstance(Number(instanceId));
     removeInstanceInfo();
+    removeWatchdogPid();
     log.ok(`\n✅ Instance ${instanceId} đã tự tắt.`);
     log.info(`   Lý do: ${reason}`);
     log.info(`   Tổng chi: ~$${totalSpent.toFixed(3)}`);
@@ -308,7 +318,42 @@ async function autoDestroy(instanceId: string, reason: string, totalSpent: numbe
   process.exit(0);
 }
 
+/** Start watchdog as a detached background process */
+async function startServiceMode(instanceId: string, dphTotal: number) {
+  // Build args for background process
+  const bgArgs = [
+    "run", "src/cli.ts", "watch",
+    ...(args.hours ? ["--hours", String(args.hours)] : []),
+    ...(args.budget ? ["--budget", String(args.budget)] : []),
+  ];
+
+  const proc = Bun.spawn(["bun", ...bgArgs], {
+    cwd: import.meta.dir + "/..",
+    stdio: ["ignore", "ignore", "ignore"],
+    env: { ...process.env, VLLM_SERVICE_BG: "1" },
+  });
+
+  proc.unref(); // detach from parent
+  saveWatchdogPid(proc.pid);
+
+  log.ok(`\n🔧 Watchdog chạy nền: PID ${proc.pid}`);
+  log.dim(`   Xem: bun run deploy dashboard`);
+  log.dim(`   Tắt: bun run deploy stop`);
+}
+
 async function cmdStop() {
+  // Kill watchdog service if running
+  if (isWatchdogRunning()) {
+    const pid = loadWatchdogPid();
+    if (pid) {
+      try {
+        process.kill(pid);
+        log.ok(`🔧 Watchdog service (PID ${pid}) stopped.`);
+      } catch {}
+      removeWatchdogPid();
+    }
+  }
+
   const instances = await showInstances();
 
   if (instances.length === 0) {
@@ -553,45 +598,49 @@ function cmdHelp() {
 
   ${"\x1b[33m"}ACTIONS:${"\x1b[0m"}
     start           Tìm GPU rẻ nhất → deploy instance
-    stop            Destroy instance → ngừng tính tiền
+    stop            Destroy instance + kill watchdog
     status          Xem instances đang chạy
     info            Hiện thông tin kết nối
     test            Test API endpoint
+    dashboard       📊 TUI real-time dashboard (alias: dash)
     ssh             SSH vào instance
     config-claude   Cập nhật Claude Code settings → vLLM
       --restore     Khôi phục settings gốc từ backup
       --off         Tắt vLLM, dùng lại Anthropic API
     logs            Xem logs instance
     search          Tìm GPU available (không deploy)
-    watch           Gắn watchdog vào instance đang chạy
+    watch           Gắn watchdog auto-shutdown vào instance
     help            Hiện help này
 
-  ${"\x1b[33m"}FLAGS (cho start/search):${"\x1b[0m"}
-    --cheap         💰 Giá thuê/hr thấp nhất (có thể chậm)
-    --fast          ⚡ Tok/s cao nhất (có thể đắt)
-    --best          ⭐ $/1K tokens thấp nhất (default, cân bằng)
-    --gpu <name>    🎯 Lock GPU cụ thể (e.g. "RTX 4090")
-    --max-price <n> 💵 Max giá/hr (e.g. 0.80)
-    --spot          💸 Dùng interruptible (rẻ hơn ~30%)
-    --model <name>  🔄 Đổi model (override .env)
-    --context <n>   📏 Context length (e.g. 4096, 16384)
-    --region <geo>  🌍 Ưu tiên vùng (US, EU, Asia)
-    --auto / -y     🤖 Tự chọn rẻ nhất, không hỏi
+  ${"\x1b[33m"}FLAGS:${"\x1b[0m"}
+    --cheap         💰 Giá thuê/hr thấp nhất
+    --fast          ⚡ Tok/s cao nhất
+    --best          ⭐ $/1K tokens thấp nhất (default)
+    --gpu <name>    🎯 Lock GPU cụ thể             [VLLM_GPU]
+    --max-price <n> 💵 Max giá/hr                   [VLLM_MAX_PRICE]
+    --spot          💸 Dùng interruptible            [VLLM_SPOT=1]
+    --model <name>  🔄 Đổi model                    [VLLM_MODEL]
+    --context <n>   📏 Context length                [VLLM_CONTEXT]
+    --region <geo>  🌍 Ưu tiên vùng                  [VLLM_REGION]
+    --auto / -y     🤖 Tự chọn, không hỏi            [VLLM_AUTO=1]
     --dry-run       🔍 Chỉ search, không deploy
-    --hours <n>     ⏰ Tự tắt sau N giờ (e.g. 2)
-    --budget <n>    💵 Tự tắt khi chi $N (e.g. 1.50)
+    --hours <n>     ⏰ Tự tắt sau N giờ              [VLLM_HOURS]
+    --budget <n>    💵 Tự tắt khi chi $N             [VLLM_BUDGET]
+    --service       🔧 Chạy watchdog nền (background) [VLLM_SERVICE=1]
+
+  ${"\x1b[33m"}ENV VARS:${"\x1b[0m"}  (ưu tiên: flag > env var > .env file)
+    ${"\x1b[90m"}VLLM_MODEL, VLLM_GPU, VLLM_MAX_PRICE, VLLM_SPOT,${"\x1b[0m"}
+    ${"\x1b[90m"}VLLM_HOURS, VLLM_BUDGET, VLLM_CONTEXT, VLLM_REGION,${"\x1b[0m"}
+    ${"\x1b[90m"}VLLM_AUTO, VLLM_SERVICE, VLLM_STRATEGY${"\x1b[0m"}
 
   ${"\x1b[33m"}EXAMPLES:${"\x1b[0m"}
-    ${"\x1b[90m"}bun run start                        # Smart search, chọn best deal${"\x1b[0m"}
-    ${"\x1b[90m"}bun run start --cheap                 # Rẻ nhất $/hr${"\x1b[0m"}
-    ${"\x1b[90m"}bun run start --fast --gpu "A100"      # A100 nhanh nhất${"\x1b[0m"}
-    ${"\x1b[90m"}bun run start --spot -y                # Spot rẻ, auto deploy${"\x1b[0m"}
-    ${"\x1b[90m"}bun run start --max-price 0.30 -y      # Max $0.30/hr, auto${"\x1b[0m"}
-    ${"\x1b[90m"}bun run start --model google/gemma-4-12b-it --context 16384${"\x1b[0m"}
-    ${"\x1b[90m"}bun run search --spot                  # So sánh on-demand vs spot${"\x1b[0m"}
-    ${"\x1b[90m"}bun run start --cheap --spot -y         # Siêu tiết kiệm, full auto${"\x1b[0m"}
-    ${"\x1b[90m"}bun run start --hours 2 -y               # Chạy 2h rồi tự tắt${"\x1b[0m"}
-    ${"\x1b[90m"}bun run start --budget 1 --hours 3 -y    # Tắt khi chi $1 HOẶC 3h${"\x1b[0m"}
+    ${"\x1b[90m"}bun run start --hours 2 -y              # 2h rồi tự tắt${"\x1b[0m"}
+    ${"\x1b[90m"}bun run start --budget 1 --service -y   # Background, tắt khi chi $1${"\x1b[0m"}
+    ${"\x1b[90m"}bun run deploy dashboard                # TUI monitoring${"\x1b[0m"}
+    ${"\x1b[90m"}bun run start --cheap --spot -y          # Siêu tiết kiệm${"\x1b[0m"}
+    ${"\x1b[90m"}VLLM_HOURS=2 VLLM_AUTO=1 bun run start  # Dùng env vars${"\x1b[0m"}
+    ${"\x1b[90m"}bun run deploy watch --hours 1 --service # Background watchdog${"\x1b[0m"}
+    ${"\x1b[90m"}bun run deploy stop                      # Tắt tất cả${"\x1b[0m"}
 
   ${"\x1b[32m"}CHI PHÍ: ~$0.20-0.50/hr | ~$11-35/tháng (2h/ngày)${"\x1b[0m"}
 `);
@@ -617,8 +666,22 @@ async function cmdWatch() {
     return;
   }
 
-  log.info(`\n👀 Watch instance ${info.instanceId} @ ${formatPrice(dph)}/hr`);
-  await startWatchdog(info.instanceId, dph);
+  if (args.service) {
+    await startServiceMode(info.instanceId, dph);
+  } else {
+    log.info(`\n👀 Watch instance ${info.instanceId} @ ${formatPrice(dph)}/hr`);
+    await startWatchdog(info.instanceId, dph);
+  }
+}
+
+// === Dashboard command: TUI monitoring ===
+async function cmdDashboard() {
+  const { startDashboard } = await import("./dashboard");
+  await startDashboard({
+    hours: args.hours,
+    budget: args.budget,
+    service: args.service,
+  });
 }
 
 // === Router ===
@@ -633,6 +696,8 @@ const commands: Record<string, () => Promise<void> | void> = {
   logs: cmdLogs,
   search: cmdSearch,
   watch: cmdWatch,
+  dashboard: cmdDashboard,
+  dash: cmdDashboard,
   help: cmdHelp,
 };
 

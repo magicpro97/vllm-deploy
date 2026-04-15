@@ -1,0 +1,414 @@
+/**
+ * TUI Dashboard for vLLM instance monitoring.
+ * Uses blessed + blessed-contrib for real-time terminal dashboard.
+ */
+import blessed from "blessed";
+import contrib from "blessed-contrib";
+import { loadInstanceInfo, type InstanceInfo } from "./config";
+import { getInstanceMetrics, destroyInstance } from "./vastai";
+import { getRecentSessionStats, type ClaudeStats } from "./claude-stats";
+
+interface DashboardState {
+  info: InstanceInfo;
+  startTime: number;
+  hoursLimit?: number;
+  budgetLimit?: number;
+  dphTotal: number;
+  // Accumulated
+  totalSpent: number;
+  elapsedHours: number;
+  // vLLM API stats
+  apiRequests: number;
+  apiLatencyMs: number[];
+  apiTokensGenerated: number;
+  // Claude session stats
+  claudeStats?: ClaudeStats;
+}
+
+export async function startDashboard(opts: {
+  hours?: number;
+  budget?: number;
+  service?: boolean;
+}) {
+  const info = loadInstanceInfo();
+  if (!info) {
+    console.error("❌ No instance info. Run: bun run deploy start");
+    process.exit(1);
+  }
+
+  const state: DashboardState = {
+    info,
+    startTime: Date.now(),
+    hoursLimit: opts.hours ?? info.stopAfterHours,
+    budgetLimit: opts.budget ?? info.stopAfterBudget,
+    dphTotal: info.dphTotal ?? 0,
+    totalSpent: 0,
+    elapsedHours: 0,
+    apiRequests: 0,
+    apiLatencyMs: [],
+    apiTokensGenerated: 0,
+  };
+
+  const screen = blessed.screen({
+    smartCSR: true,
+    title: `vLLM Dashboard — ${info.instanceId}`,
+  });
+
+  const grid = new contrib.grid({ rows: 12, cols: 12, screen });
+
+  // === Row 0-2: Header + Time/Budget ===
+  const headerBox = grid.set(0, 0, 2, 6, blessed.box, {
+    label: " 🚀 vLLM Instance ",
+    tags: true,
+    border: { type: "line" },
+    style: {
+      border: { fg: "cyan" },
+      label: { fg: "cyan", bold: true },
+    },
+    content: formatHeader(state),
+  });
+
+  const timeBudgetBox = grid.set(0, 6, 2, 6, blessed.box, {
+    label: " ⏰ Time & Budget ",
+    tags: true,
+    border: { type: "line" },
+    style: {
+      border: { fg: "yellow" },
+      label: { fg: "yellow", bold: true },
+    },
+    content: "",
+  });
+
+  // === Row 2-5: Token stats + Request stats ===
+  const tokenBox = grid.set(2, 0, 3, 4, blessed.box, {
+    label: " 🔤 Tokens ",
+    tags: true,
+    border: { type: "line" },
+    style: { border: { fg: "green" }, label: { fg: "green", bold: true } },
+    content: "",
+  });
+
+  const requestBox = grid.set(2, 4, 3, 4, blessed.box, {
+    label: " 📡 Requests ",
+    tags: true,
+    border: { type: "line" },
+    style: { border: { fg: "blue" }, label: { fg: "blue", bold: true } },
+    content: "",
+  });
+
+  const toolBox = grid.set(2, 8, 3, 4, blessed.box, {
+    label: " 🔧 Tools / MCP ",
+    tags: true,
+    border: { type: "line" },
+    style: { border: { fg: "magenta" }, label: { fg: "magenta", bold: true } },
+    content: "",
+  });
+
+  // === Row 5-8: System metrics ===
+  const cpuGauge = grid.set(5, 0, 3, 3, contrib.gauge, {
+    label: " CPU% ",
+    stroke: "green",
+    fill: "white",
+    border: { type: "line" },
+    style: { border: { fg: "green" } },
+  });
+
+  const ramGauge = grid.set(5, 3, 3, 3, contrib.gauge, {
+    label: " RAM ",
+    stroke: "blue",
+    fill: "white",
+    border: { type: "line" },
+    style: { border: { fg: "blue" } },
+  });
+
+  const gpuGauge = grid.set(5, 6, 3, 3, contrib.gauge, {
+    label: " GPU ",
+    stroke: "yellow",
+    fill: "white",
+    border: { type: "line" },
+    style: { border: { fg: "yellow" } },
+  });
+
+  const networkBox = grid.set(5, 9, 3, 3, blessed.box, {
+    label: " 🌐 Network ",
+    tags: true,
+    border: { type: "line" },
+    style: { border: { fg: "cyan" }, label: { fg: "cyan", bold: true } },
+    content: "",
+  });
+
+  // === Row 8-10: Latency sparkline ===
+  const latencyLine = grid.set(8, 0, 3, 8, contrib.sparkline, {
+    label: " ⚡ Latency (ms) ",
+    tags: true,
+    border: { type: "line" },
+    style: {
+      fg: "blue",
+      border: { fg: "blue" },
+      label: { fg: "blue", bold: true },
+    },
+  });
+
+  const statusBox = grid.set(8, 8, 3, 4, blessed.box, {
+    label: " 📋 Status ",
+    tags: true,
+    border: { type: "line" },
+    style: { border: { fg: "white" }, label: { fg: "white", bold: true } },
+    content: "",
+  });
+
+  // === Row 10-12: Log ===
+  const logBox = grid.set(11, 0, 1, 12, blessed.box, {
+    label: " [q] Quit  [s] Stop instance  [r] Refresh ",
+    tags: true,
+    border: { type: "line" },
+    style: {
+      border: { fg: "gray" },
+      label: { fg: "gray" },
+      fg: "gray",
+    },
+    content: " Press q to quit, s to stop instance and exit",
+  });
+
+  // Key bindings
+  screen.key(["q", "C-c"], () => {
+    screen.destroy();
+    process.exit(0);
+  });
+
+  screen.key(["s"], async () => {
+    logBox.setContent(" 🛑 Stopping instance...");
+    screen.render();
+    try {
+      await destroyInstance(Number(info.instanceId));
+      logBox.setContent(" ✅ Instance destroyed. Exiting...");
+      screen.render();
+      setTimeout(() => {
+        screen.destroy();
+        process.exit(0);
+      }, 1500);
+    } catch (e) {
+      logBox.setContent(` ❌ Failed: ${e}`);
+      screen.render();
+    }
+  });
+
+  screen.key(["r"], () => {
+    logBox.setContent(" 🔄 Refreshing...");
+    screen.render();
+    updateAll();
+  });
+
+  // Periodic updates
+  const POLL_INTERVAL = 5_000;
+  let latencyHistory: number[] = [];
+
+  async function updateAll() {
+    // Update time/budget
+    state.elapsedHours = (Date.now() - state.startTime) / 3600000;
+    state.totalSpent = state.elapsedHours * state.dphTotal;
+
+    timeBudgetBox.setContent(formatTimeBudget(state));
+
+    // Check auto-shutdown conditions
+    if (state.hoursLimit && state.elapsedHours >= state.hoursLimit) {
+      logBox.setContent(` ⏰ ${state.hoursLimit}h reached — auto-stopping...`);
+      screen.render();
+      await autoStop(state, screen);
+      return;
+    }
+    if (state.budgetLimit && state.totalSpent >= state.budgetLimit) {
+      logBox.setContent(` 💵 $${state.budgetLimit} budget reached — auto-stopping...`);
+      screen.render();
+      await autoStop(state, screen);
+      return;
+    }
+
+    // Fetch instance metrics
+    try {
+      const metrics = await getInstanceMetrics(info.instanceId);
+      cpuGauge.setPercent(Math.min(100, Math.round(metrics.cpuUtil)));
+      const ramPct = metrics.ramTotal > 0 ? Math.round((metrics.ramUsed / metrics.ramTotal) * 100) : 0;
+      ramGauge.setPercent(Math.min(100, ramPct));
+      gpuGauge.setPercent(Math.min(100, Math.round(metrics.gpuUtil)));
+
+      networkBox.setContent(formatNetwork(metrics));
+      statusBox.setContent(formatStatus(state, metrics));
+    } catch {}
+
+    // Probe vLLM API for health + latency
+    try {
+      const start = performance.now();
+      const resp = await fetch(`${info.apiUrl}/models`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      const latency = Math.round(performance.now() - start);
+      state.apiLatencyMs.push(latency);
+      if (state.apiLatencyMs.length > 120) state.apiLatencyMs.shift();
+
+      latencyHistory.push(latency);
+      if (latencyHistory.length > 60) latencyHistory.shift();
+      latencyLine.setData(["Latency"], [latencyHistory]);
+
+      if (resp.ok) {
+        const data = await resp.json() as any;
+        const modelId = data?.data?.[0]?.id ?? "loading...";
+        headerBox.setContent(formatHeader(state, modelId));
+      }
+    } catch {
+      latencyHistory.push(0);
+      if (latencyHistory.length > 60) latencyHistory.shift();
+      latencyLine.setData(["Latency"], [latencyHistory]);
+    }
+
+    // Claude stats (less frequent — every 30s)
+    if (Math.round(state.elapsedHours * 3600 / 5) % 6 === 0) {
+      try {
+        const claudeStats = getRecentSessionStats(120);
+        if (claudeStats) {
+          state.claudeStats = claudeStats;
+        }
+      } catch {}
+    }
+
+    tokenBox.setContent(formatTokens(state));
+    requestBox.setContent(formatRequests(state));
+    toolBox.setContent(formatTools(state));
+
+    screen.render();
+  }
+
+  // Initial render
+  await updateAll();
+  screen.render();
+
+  // Start polling
+  setInterval(updateAll, POLL_INTERVAL);
+}
+
+// === Formatters ===
+
+function formatHeader(state: DashboardState, modelId?: string): string {
+  const i = state.info;
+  return [
+    ` Model: {bold}${modelId ?? i.model}{/bold}`,
+    ` Instance: ${i.instanceId}`,
+    ` API: ${i.apiUrl}`,
+    ` GPU: ${state.dphTotal > 0 ? `$${state.dphTotal.toFixed(3)}/hr` : "?"}`,
+  ].join("\n");
+}
+
+function formatTimeBudget(s: DashboardState): string {
+  const elapsed = formatDuration(s.elapsedHours * 3600);
+  const lines: string[] = [
+    ` Elapsed: {bold}${elapsed}{/bold}`,
+    ` Spent:   {bold}{yellow-fg}$${s.totalSpent.toFixed(4)}{/yellow-fg}{/bold}`,
+  ];
+
+  if (s.hoursLimit) {
+    const remaining = Math.max(0, s.hoursLimit - s.elapsedHours);
+    const pct = Math.round((s.elapsedHours / s.hoursLimit) * 100);
+    lines.push(` Time:    ${bar(pct)} ${remaining.toFixed(1)}h left`);
+  }
+
+  if (s.budgetLimit) {
+    const remaining = Math.max(0, s.budgetLimit - s.totalSpent);
+    const pct = Math.round((s.totalSpent / s.budgetLimit) * 100);
+    lines.push(` Budget:  ${bar(pct)} $${remaining.toFixed(3)} left`);
+  }
+
+  return lines.join("\n");
+}
+
+function formatTokens(s: DashboardState): string {
+  const cs = s.claudeStats;
+  if (!cs) return " Waiting for Claude stats...";
+
+  const fmt = (n: number) => n > 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
+  return [
+    ` Input:  {bold}${fmt(cs.totalInputTokens)}{/bold}`,
+    ` Output: {bold}${fmt(cs.totalOutputTokens)}{/bold}`,
+    ` Total:  {bold}{green-fg}${fmt(cs.totalTokens)}{/green-fg}{/bold}`,
+    ` Avg/req: ${fmt(cs.avgOutputTokens)}`,
+  ].join("\n");
+}
+
+function formatRequests(s: DashboardState): string {
+  const cs = s.claudeStats;
+  if (!cs) return " Waiting...";
+
+  const avgLatency = s.apiLatencyMs.length > 0
+    ? Math.round(s.apiLatencyMs.reduce((a, b) => a + b, 0) / s.apiLatencyMs.length)
+    : 0;
+  const p95 = s.apiLatencyMs.length > 0
+    ? Math.round(sorted(s.apiLatencyMs)[Math.floor(s.apiLatencyMs.length * 0.95)])
+    : 0;
+
+  return [
+    ` Requests: {bold}${cs.requestCount}{/bold}`,
+    ` Sessions: ${cs.sessions}`,
+    ` Latency avg: ${avgLatency}ms`,
+    ` Latency p95: ${p95}ms`,
+  ].join("\n");
+}
+
+function formatTools(s: DashboardState): string {
+  const cs = s.claudeStats;
+  if (!cs) return " Waiting...";
+
+  return [
+    ` Tool calls:  {bold}${cs.toolUseCalls}{/bold}`,
+    ` Web search:  ${cs.webSearchCalls}`,
+    ` Web fetch:   ${cs.webFetchCalls}`,
+    ` MCP total:   ${cs.toolUseCalls + cs.webSearchCalls + cs.webFetchCalls}`,
+  ].join("\n");
+}
+
+function formatNetwork(m: { inetUp: number; inetDown: number }): string {
+  return [
+    ` ↑ ${Math.round(m.inetUp)} Mbps`,
+    ` ↓ ${Math.round(m.inetDown)} Mbps`,
+  ].join("\n");
+}
+
+function formatStatus(s: DashboardState, m: { status: string; gpuTempC: number; gpuMemUsed: number; gpuMemTotal: number; diskUsed: number; diskTotal: number }): string {
+  return [
+    ` Status: {bold}${m.status}{/bold}`,
+    ` GPU Temp: ${m.gpuTempC}°C`,
+    ` VRAM: ${m.gpuMemUsed}/${m.gpuMemTotal}GB`,
+    ` Disk: ${m.diskUsed}/${m.diskTotal}GB`,
+  ].join("\n");
+}
+
+// === Helpers ===
+
+function formatDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  return `${h}h ${m}m ${s}s`;
+}
+
+function bar(pct: number, width = 10): string {
+  const filled = Math.round((pct / 100) * width);
+  const empty = width - filled;
+  const color = pct > 80 ? "{red-fg}" : pct > 50 ? "{yellow-fg}" : "{green-fg}";
+  return `${color}[${"█".repeat(filled)}${"░".repeat(empty)}]{/} ${pct}%`;
+}
+
+function sorted(arr: number[]): number[] {
+  return [...arr].sort((a, b) => a - b);
+}
+
+async function autoStop(state: DashboardState, screen: any) {
+  try {
+    await destroyInstance(Number(state.info.instanceId));
+    const { removeInstanceInfo } = await import("./config");
+    removeInstanceInfo();
+  } catch {}
+  setTimeout(() => {
+    screen.destroy();
+    console.log(`✅ Instance auto-stopped. Spent: $${state.totalSpent.toFixed(4)}`);
+    process.exit(0);
+  }, 2000);
+}

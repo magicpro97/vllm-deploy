@@ -243,3 +243,51 @@ export async function sshConnect(host: string, port: string | number) {
   });
   await proc.exited;
 }
+
+/** Get machine utilization metrics for an instance */
+export async function getInstanceMetrics(id: number | string): Promise<InstanceMetrics> {
+  try {
+    // vastai show instance gives detailed info including utilization
+    const result = await $`vastai show instance ${id} --raw`.text().catch(() => "{}");
+    const data = JSON.parse(result);
+    return {
+      cpuUtil: data.cpu_util ?? 0,
+      ramUsed: data.mem_usage ?? 0,
+      ramTotal: data.cpu_ram ?? 0,
+      gpuUtil: data.gpu_util ?? 0,
+      gpuTempC: data.gpu_temp ?? 0,
+      gpuMemUsed: data.gpu_mem_used ?? 0,
+      gpuMemTotal: data.gpu_ram ?? 0,
+      inetUp: data.inet_up ?? 0,
+      inetDown: data.inet_down ?? 0,
+      diskUsed: data.disk_used ?? 0,
+      diskTotal: data.disk_space ?? 0,
+      uptime: data.duration ?? 0,
+      status: data.actual_status ?? "unknown",
+    };
+  } catch {
+    return {
+      cpuUtil: 0, ramUsed: 0, ramTotal: 0,
+      gpuUtil: 0, gpuTempC: 0, gpuMemUsed: 0, gpuMemTotal: 0,
+      inetUp: 0, inetDown: 0,
+      diskUsed: 0, diskTotal: 0,
+      uptime: 0, status: "unknown",
+    };
+  }
+}
+
+export interface InstanceMetrics {
+  cpuUtil: number;
+  ramUsed: number;
+  ramTotal: number;
+  gpuUtil: number;
+  gpuTempC: number;
+  gpuMemUsed: number;
+  gpuMemTotal: number;
+  inetUp: number;
+  inetDown: number;
+  diskUsed: number;
+  diskTotal: number;
+  uptime: number;
+  status: string;
+}

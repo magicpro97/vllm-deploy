@@ -13,12 +13,19 @@
     "search": "bun run src/cli.ts search",
     "ssh": "bun run src/cli.ts ssh",
     "logs": "bun run src/cli.ts logs",
-    "config-claude": "bun run src/cli.ts config-claude"
+    "config-claude": "bun run src/cli.ts config-claude",
+    "dashboard": "bun run src/cli.ts dashboard",
+    "dash": "bun run src/cli.ts dashboard",
+    "watch": "bun run src/cli.ts watch"
   },
   "devDependencies": {
     "@types/bun": "latest"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "blessed-contrib": "^4.11.0"
   }
 }

@@ -113,3 +113,37 @@ export function removeInstanceInfo() {
     require("fs").unlinkSync(INFO_PATH);
   } catch {}
 }
+
+// === PID file for service mode ===
+const PID_PATH = `${import.meta.dir}/../.watchdog.pid`;
+
+export function saveWatchdogPid(pid: number) {
+  Bun.write(PID_PATH, String(pid));
+}
+
+export function loadWatchdogPid(): number | null {
+  try {
+    const data = require("fs").readFileSync(PID_PATH, "utf-8").trim();
+    return Number(data);
+  } catch {
+    return null;
+  }
+}
+
+export function removeWatchdogPid() {
+  try {
+    require("fs").unlinkSync(PID_PATH);
+  } catch {}
+}
+
+export function isWatchdogRunning(): boolean {
+  const pid = loadWatchdogPid();
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0); // check if process exists
+    return true;
+  } catch {
+    removeWatchdogPid();
+    return false;
+  }
+}
