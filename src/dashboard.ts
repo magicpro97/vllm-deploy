@@ -160,8 +160,14 @@ export async function startDashboard(opts: {
     content: formatSettings(state, state.info, opts.args),
   });
 
-  // === Row 10-11: Realtime Logs ===
-  const logsPanel = grid.set(10, 0, 2, 12, blessed.log, {
+  // === Row 10-11: Realtime Logs (virtual scroll) ===
+  const LOG_BUFFER_MAX = 500;
+  const LOG_VISIBLE_LINES = 20;
+  const logBuffer: string[] = [];
+  let logScrollOffset = 0; // 0 = bottom (newest), positive = scrolled up
+  let logAutoScroll = true;
+
+  const logsPanel = grid.set(10, 0, 2, 12, blessed.box, {
     label: " 📜 Logs ",
     tags: true,
     border: { type: "line" },
@@ -170,13 +176,51 @@ export async function startDashboard(opts: {
       label: { fg: "green", bold: true },
       fg: "gray",
     },
-    scrollable: true,
-    alwaysScroll: true,
-    scrollbar: {
-      style: { bg: "blue" },
-    },
+    scrollable: false,
     mouse: true,
-    keys: true,
+  });
+
+  function renderLogs() {
+    const rawHeight = logsPanel.height;
+    const panelHeight = rawHeight
+      ? Math.max(1, Number(rawHeight) - 2)
+      : LOG_VISIBLE_LINES;
+    const totalLines = logBuffer.length;
+    const maxOffset = Math.max(0, totalLines - panelHeight);
+    logScrollOffset = Math.min(logScrollOffset, maxOffset);
+    const startIdx = Math.max(0, totalLines - panelHeight - logScrollOffset);
+    const endIdx = startIdx + panelHeight;
+    const visible = logBuffer.slice(startIdx, endIdx);
+    const scrollIndicator = logScrollOffset > 0
+      ? `{gray-fg} ↑ ${logScrollOffset} more lines{/gray-fg}`
+      : "";
+    logsPanel.setContent(visible.join("\n") + (scrollIndicator ? "\n" + scrollIndicator : ""));
+  }
+
+  function appendLog(line: string) {
+    logBuffer.push(line.substring(0, 250));
+    if (logBuffer.length > LOG_BUFFER_MAX) {
+      logBuffer.splice(0, logBuffer.length - LOG_BUFFER_MAX);
+    }
+    if (logAutoScroll) {
+      logScrollOffset = 0;
+    }
+    renderLogs();
+  }
+
+  // Mouse wheel scroll on logs panel
+  logsPanel.on("wheelup", () => {
+    logAutoScroll = false;
+    logScrollOffset = Math.min(logScrollOffset + 3, Math.max(0, logBuffer.length - 5));
+    renderLogs();
+    screen.render();
+  });
+
+  logsPanel.on("wheeldown", () => {
+    logScrollOffset = Math.max(0, logScrollOffset - 3);
+    if (logScrollOffset === 0) logAutoScroll = true;
+    renderLogs();
+    screen.render();
   });
 
   // === Row 12: Hotkeys ===
@@ -226,7 +270,7 @@ export async function startDashboard(opts: {
     void getLogs(info.instanceId, 30).then((logs: string) => {
       const lines = logs.split("\n").filter((l: string) => l.trim());
       for (const line of lines) {
-        logsPanel.log(line.substring(0, 200));
+        appendLog(line);
       }
       logBox.setContent(" Press q to quit, s to stop, l to refresh logs");
       screen.render();
@@ -314,14 +358,14 @@ export async function startDashboard(opts: {
         const logs = await getLogs(state.info.instanceId, 20);
         const newLines = logs.split("\n").filter((l: string) => l.trim());
         for (const line of newLines) {
-          const trimmed = line.substring(0, 200);
+          const trimmed = line.substring(0, 250);
           if (!lastLogLines.has(trimmed)) {
             lastLogLines.add(trimmed);
             if (lastLogLines.size > 200) {
               const first = lastLogLines.values().next().value;
               if (first) lastLogLines.delete(first);
             }
-            logsPanel.log(trimmed);
+            appendLog(trimmed);
           }
         }
       } catch {}
