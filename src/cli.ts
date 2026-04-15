@@ -685,6 +685,7 @@ async function cmdDashboard() {
     hours: args.hours,
     budget: args.budget,
     service: args.service,
+    args,
   });
 }
 

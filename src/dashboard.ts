@@ -4,9 +4,10 @@
  */
 import blessed from "blessed";
 import contrib from "blessed-contrib";
-import { loadInstanceInfo, type InstanceInfo } from "./config";
+import { loadInstanceInfo, loadConfig, isWatchdogRunning, type InstanceInfo } from "./config";
 import { getInstanceMetrics, destroyInstance } from "./vastai";
 import { getRecentSessionStats, type ClaudeStats } from "./claude-stats";
+import type { CliArgs } from "./args";
 
 interface DashboardState {
   info: InstanceInfo;
@@ -29,6 +30,7 @@ export async function startDashboard(opts: {
   hours?: number;
   budget?: number;
   service?: boolean;
+  args?: CliArgs;
 }) {
   const info = loadInstanceInfo();
   if (!info) {
@@ -138,7 +140,7 @@ export async function startDashboard(opts: {
     content: "",
   });
 
-  // === Row 8-10: Latency sparkline ===
+  // === Row 8-10: Latency sparkline + Settings ===
   const latencyLine = grid.set(8, 0, 3, 8, contrib.sparkline, {
     label: " ⚡ Latency (ms) ",
     tags: true,
@@ -150,12 +152,12 @@ export async function startDashboard(opts: {
     },
   });
 
-  const statusBox = grid.set(8, 8, 3, 4, blessed.box, {
-    label: " 📋 Status ",
+  const settingsBox = grid.set(8, 8, 3, 4, blessed.box, {
+    label: " ⚙ Settings ",
     tags: true,
     border: { type: "line" },
     style: { border: { fg: "white" }, label: { fg: "white", bold: true } },
-    content: "",
+    content: formatSettings(state, state.info, opts.args),
   });
 
   // === Row 10-12: Log ===
@@ -232,8 +234,7 @@ export async function startDashboard(opts: {
       ramGauge.setPercent(Math.min(100, ramPct));
       gpuGauge.setPercent(Math.min(100, Math.round(metrics.gpuUtil)));
 
-      networkBox.setContent(formatNetwork(metrics));
-      statusBox.setContent(formatStatus(state, metrics));
+      networkBox.setContent(formatNetworkStatus(metrics));
     } catch {}
 
     // Probe vLLM API for health + latency
@@ -274,6 +275,7 @@ export async function startDashboard(opts: {
     tokenBox.setContent(formatTokens(state));
     requestBox.setContent(formatRequests(state));
     toolBox.setContent(formatTools(state));
+    settingsBox.setContent(formatSettings(state, state.info, opts.args));
 
     screen.render();
   }
@@ -364,20 +366,66 @@ function formatTools(s: DashboardState): string {
   ].join("\n");
 }
 
-function formatNetwork(m: { inetUp: number; inetDown: number }): string {
+function formatNetworkStatus(m: { inetUp: number; inetDown: number; status: string; gpuTempC: number; gpuMemUsed: number; gpuMemTotal: number; diskUsed: number; diskTotal: number }): string {
   return [
     ` ↑ ${Math.round(m.inetUp)} Mbps`,
     ` ↓ ${Math.round(m.inetDown)} Mbps`,
+    ` ${m.status === "running" ? "{green-fg}●{/}" : "{red-fg}●{/}"} ${m.status}`,
+    ` 🌡 ${m.gpuTempC}°C`,
+    ` VRAM ${m.gpuMemUsed}/${m.gpuMemTotal}G`,
+    ` Disk ${m.diskUsed}/${m.diskTotal}G`,
   ].join("\n");
 }
 
-function formatStatus(_s: DashboardState, m: { status: string; gpuTempC: number; gpuMemUsed: number; gpuMemTotal: number; diskUsed: number; diskTotal: number }): string {
-  return [
-    ` Status: {bold}${m.status}{/bold}`,
-    ` GPU Temp: ${m.gpuTempC}°C`,
-    ` VRAM: ${m.gpuMemUsed}/${m.gpuMemTotal}GB`,
-    ` Disk: ${m.diskUsed}/${m.diskTotal}GB`,
-  ].join("\n");
+function formatSettings(state: DashboardState, _info: InstanceInfo, cliArgs?: CliArgs): string {
+  const cfg = loadConfig();
+  const watchdog = isWatchdogRunning();
+
+  const lines: string[] = [];
+
+  // Model
+  lines.push(` Model:    {bold}${cliArgs?.model ?? cfg.model}{/bold}`);
+
+  // Strategy
+  const strat = cliArgs?.strategy ?? "best";
+  const stratIcon = strat === "cheap" ? "💰" : strat === "fast" ? "⚡" : "⭐";
+  lines.push(` Strategy: ${stratIcon} ${strat}`);
+
+  // GPU preference
+  if (cliArgs?.gpu) {
+    lines.push(` GPU lock: {bold}${cliArgs.gpu}{/bold}`);
+  } else {
+    lines.push(` GPU pref: ${cfg.gpuPrefer}`);
+  }
+
+  // Instance type
+  const instType = cliArgs?.spot ? "spot" : cfg.instanceType;
+  lines.push(` Type:     ${instType === "interruptible" || instType === "spot" ? "{yellow-fg}spot{/}" : "{green-fg}on-demand{/}"}`);
+
+  // Price
+  lines.push(` $/hr:     {yellow-fg}$${state.dphTotal.toFixed(3)}{/}`);
+
+  // Limits
+  if (state.hoursLimit) {
+    lines.push(` Max time: ${state.hoursLimit}h`);
+  }
+  if (state.budgetLimit) {
+    lines.push(` Max $:    $${state.budgetLimit}`);
+  }
+
+  // Service mode
+  lines.push(` Watchdog: ${watchdog ? "{green-fg}running{/}" : "{gray-fg}off{/}"}`);
+
+  // Region
+  if (cliArgs?.region) {
+    lines.push(` Region:   ${cliArgs.region}`);
+  }
+
+  // Context
+  const ctx = cliArgs?.context ?? 8192;
+  lines.push(` Context:  ${ctx >= 1000 ? `${(ctx / 1000).toFixed(0)}K` : ctx}`);
+
+  return lines.join("\n");
 }
 
 // === Helpers ===
